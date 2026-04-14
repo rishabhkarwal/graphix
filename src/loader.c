@@ -14,10 +14,12 @@ mesh load_obj(const char *filename) {
     // start with a small allocation pool
     int point_cap = 1024;
     int edge_cap = 1024;
+    int triangle_cap = 1024;
     point *points = malloc(point_cap * sizeof(point));
     edge *edges = malloc(edge_cap * sizeof(edge));
+    triangle *triangles = malloc(triangle_cap * sizeof(triangle));
     
-    int point_count = 0, edge_count = 0, face_count = 0;
+    int point_count = 0, edge_count = 0, triangle_count = 0, face_count = 0;
     
     char line[256];
     while (fgets(line, sizeof(line), f)) {
@@ -36,22 +38,41 @@ mesh load_obj(const char *filename) {
             face_count++;
             
             // parse face: f ...
-            // note: obj indices are 1-based
             int v[64], count = 0; // 64 is safe enough for complex polygons
             char *token = line + 2;
             
             while (*token != '\0') {
                 while (*token == ' ') token++;
                 if (*token == '\0' || *token == '\n') break;
-                
-                int index;
-                if (sscanf(token, "%d", &index) == 1) {
-                    if (count < 64) v[count++] = index - 1; // convert to 0-based
+
+                char *token_end = token;
+                while (*token_end != ' ' && *token_end != '\0' && *token_end != '\n') token_end++;
+
+                char saved = *token_end;
+                *token_end = '\0';
+
+                // supports obj token styles: v, v/vt, v//vn, v/vt/vn
+                int raw_index = 0;
+                if (sscanf(token, "%d", &raw_index) == 1) {
+                    int index = -1;
+
+                    // obj index rules: positive = 1-based, negative = relative to current end
+                    if (raw_index > 0) {
+                        index = raw_index - 1;
+                    } else if (raw_index < 0) {
+                        index = point_count + raw_index;
+                    }
+
+                    if (index >= 0 && index < point_count && count < 64) {
+                        v[count++] = index;
+                    }
                 }
-                while (*token != ' ' && *token != '\0' && *token != '\n') token++;
+
+                *token_end = saved;
+                token = token_end;
             }
             
-            // convert face to edges
+            // convert face to edges for wireframe
             for (int i = 0; i < count; i++) {
                 // dynamically resize edges array
                 if (edge_count >= edge_cap) {
@@ -61,6 +82,20 @@ mesh load_obj(const char *filename) {
                 int start = v[i];
                 int end = v[(i + 1) % count]; // wrap around to connect shape
                 edges[edge_count++] = (edge){start, end};
+            }
+
+            // triangulate each polygon face using fan triangulation
+            for (int i = 1; i + 1 < count; i++) {
+                if (triangle_count >= triangle_cap) {
+                    triangle_cap *= 2;
+                    triangles = realloc(triangles, triangle_cap * sizeof(triangle));
+                }
+
+                triangles[triangle_count++] = (triangle){
+                    v[0],
+                    v[i],
+                    v[i + 1]
+                };
             }
         }
     }
@@ -72,8 +107,11 @@ mesh load_obj(const char *filename) {
         
     m.edge_count = edge_count;
     m.edges = realloc(edges, edge_count * sizeof(edge));
+
+    m.triangle_count = triangle_count;
+    m.triangles = realloc(triangles, triangle_count * sizeof(triangle));
     
-    printf("Loaded '%s' successfully: %d vertices, %d faces\n", filename, point_count, face_count);
+    printf("Loaded '%s' successfully: %d vertices, %d faces, %d triangles\n", filename, point_count, face_count, triangle_count);
         
     return m;
 }
@@ -113,6 +151,8 @@ void free_mesh(mesh *m) {
     // clear dynamic memory to prevent memory leaks
     if (m->points) free(m->points);
     if (m->edges) free(m->edges);
+    if (m->triangles) free(m->triangles);
     m->point_count = 0;
     m->edge_count = 0;
+    m->triangle_count = 0;
 }

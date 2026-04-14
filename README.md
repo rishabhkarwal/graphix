@@ -21,6 +21,7 @@ make
 ## Controls
 
 - **ESC** - Close window
+- **SPACE** - Toggle triangle debug view
 
 ## Requirements
 

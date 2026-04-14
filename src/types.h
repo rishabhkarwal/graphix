@@ -11,6 +11,11 @@ typedef struct {
     int start, end;
 } edge;
 
+// single triangle face stored as point indices
+typedef struct {
+    int a, b, c;
+} triangle;
+
 // 3D object composed of points and edges
 typedef struct {
     point *points;
@@ -18,6 +23,9 @@ typedef struct {
     
     edge *edges;
     int edge_count;
+
+    triangle *triangles;
+    int triangle_count;
 } mesh;
 
 #endif

@@ -52,6 +52,11 @@ int events_quit(void) {
     return 0;
 }
 
+int key_down(int key) {
+    if (!screen) return 0;
+    return glfwGetKey(screen, key) == GLFW_PRESS;
+}
+
 void fill_background(int r, int g, int b) {
     // clears screen using the given RGB colour
     glClearColor(r / 255.0f, g / 255.0f, b / 255.0f, 1.0f);

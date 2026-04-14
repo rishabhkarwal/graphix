@@ -75,6 +75,10 @@ int main(int argc, char *argv[]) {
     // track frame time for frame-rate independent rotation
     double last_time = glfwGetTime();
 
+    // toggles debug draw mode for triangulation
+    int triangle_view = 0;
+    int was_space_down = 0;
+
     // primary game loop
     while (1) {
         double current_time = glfwGetTime();
@@ -85,6 +89,13 @@ int main(int argc, char *argv[]) {
             quit_renderer();
             break;
         }
+
+        // toggle triangle debug view on space key press edge
+        int is_space_down = key_down(GLFW_KEY_SPACE);
+        if (is_space_down && !was_space_down) {
+            triangle_view = !triangle_view;
+        }
+        was_space_down = is_space_down;
 
         // wipe previous frame with solid colour
         fill_background(background[0], background[1], background[2]);
@@ -102,12 +113,25 @@ int main(int argc, char *argv[]) {
             projected[i] = convert(rotated);
         }
 
-        // connect the lines for the wireframe render
-        for (int i = 0; i < m.edge_count; i++) {
-            edge e = m.edges[i];
-            point start = projected[e.start];
-            point end = projected[e.end];
-            draw_aaline(start, end, accent[0], accent[1], accent[2]);
+        // draw either mesh edges or triangulation edges
+        if (!triangle_view) {
+            for (int i = 0; i < m.edge_count; i++) {
+                edge e = m.edges[i];
+                point start = projected[e.start];
+                point end = projected[e.end];
+                draw_aaline(start, end, accent[0], accent[1], accent[2]);
+            }
+        } else {
+            for (int i = 0; i < m.triangle_count; i++) {
+                triangle t = m.triangles[i];
+                point a = projected[t.a];
+                point b = projected[t.b];
+                point c = projected[t.c];
+
+                draw_aaline(a, b, accent[0], accent[1], accent[2]);
+                draw_aaline(b, c, accent[0], accent[1], accent[2]);
+                draw_aaline(c, a, accent[0], accent[1], accent[2]);
+            }
         }
 
         // render to the physical screen
