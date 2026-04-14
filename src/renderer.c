@@ -63,6 +63,16 @@ void fill_background(int r, int g, int b) {
     glClear(GL_COLOR_BUFFER_BIT);
 }
 
+void draw_triangle(point a, point b, point c, int r, int g, int b_colour) {
+    // draws a filled triangle using projected 2D co-ordinates
+    glColor3f(r / 255.0f, g / 255.0f, b_colour / 255.0f);
+    glBegin(GL_TRIANGLES);
+    glVertex2f(a.x, a.y);
+    glVertex2f(b.x, b.y);
+    glVertex2f(c.x, c.y);
+    glEnd();
+}
+
 void draw_aaline(point start, point end, int r, int g, int b) {
     // draws an anti-aliased line between two co-ordinates
     glColor3f(r / 255.0f, g / 255.0f, b / 255.0f);

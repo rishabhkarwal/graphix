@@ -12,6 +12,7 @@
 
 int background[3] = {0, 0, 0};
 int accent[3]     = {255, 255, 255};
+int face_colour[3] = {28, 28, 28};
 
 point project(point position, float scale) {
     // projects 3D co-ordinate to 2D plane
@@ -96,6 +97,8 @@ int main(int argc, char *argv[]) {
     point *projected = malloc(sizeof(point) * m.point_count);
     point *camera_space = malloc(sizeof(point) * m.point_count);
     int *triangle_front = malloc(sizeof(int) * m.triangle_count);
+    int *triangle_order = malloc(sizeof(int) * m.triangle_count);
+    float *triangle_depth = malloc(sizeof(float) * m.triangle_count);
 
     // track frame time for frame-rate independent rotation
     double last_time = glfwGetTime();
@@ -158,6 +161,8 @@ int main(int argc, char *argv[]) {
                 (pa.z + pb.z + pc.z) / 3.0f
             };
 
+            triangle_depth[i] = centroid.z;
+
             point outward = subtract(centroid, object_center);
             if (dot(normal, outward) < 0.0f) {
                 normal.x = -normal.x;
@@ -172,6 +177,34 @@ int main(int argc, char *argv[]) {
 
         // draw either mesh edges or triangulation edges
         if (!triangle_view) {
+            // draw front-facing triangles from back to front
+            int front_count = 0;
+            for (int i = 0; i < m.triangle_count; i++) {
+                if (!triangle_front[i]) continue;
+                triangle_order[front_count++] = i;
+            }
+
+            // painter sort by depth (larger z means farther away)
+            for (int i = 1; i < front_count; i++) {
+                int key = triangle_order[i];
+                float key_depth = triangle_depth[key];
+                int j = i - 1;
+                while (j >= 0 && triangle_depth[triangle_order[j]] < key_depth) {
+                    triangle_order[j + 1] = triangle_order[j];
+                    j--;
+                }
+                triangle_order[j + 1] = key;
+            }
+
+            for (int i = 0; i < front_count; i++) {
+                triangle t = m.triangles[triangle_order[i]];
+                point a = projected[t.a];
+                point b = projected[t.b];
+                point c = projected[t.c];
+                draw_triangle(a, b, c, face_colour[0], face_colour[1], face_colour[2]);
+            }
+
+            // overlay visible wireframe edges
             for (int i = 0; i < m.edge_count; i++) {
                 edge e = m.edges[i];
 
@@ -223,6 +256,8 @@ int main(int argc, char *argv[]) {
     free(projected);
     free(camera_space);
     free(triangle_front);
+    free(triangle_order);
+    free(triangle_depth);
     free_mesh(&m);
     return 0;
 }
