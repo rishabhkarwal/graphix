@@ -3,9 +3,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <GLFW/glfw3.h>
 
 #define WIDTH 600
 #define HEIGHT 600
+#define PI 3.14159265359f
+#define TAU (2.0f * PI)
 
 int background[3] = {0, 0, 0};
 int accent[3]     = {255, 255, 255};
@@ -57,7 +60,7 @@ int main(int argc, char *argv[]) {
     // standardise position
     centre(&m);
 
-    // set static orientation parameters
+    // initialise rotation angles
     float delta = 8.0f;
     float angle_x = 0.5f; // pitch
     float angle_y = 0.5f; // yaw
@@ -69,8 +72,14 @@ int main(int argc, char *argv[]) {
     // temporary storage for projected points each frame
     point *projected = malloc(sizeof(point) * m.point_count);
 
+    // track frame time for frame-rate independent rotation
+    double last_time = glfwGetTime();
+
     // primary game loop
     while (1) {
+        double current_time = glfwGetTime();
+        float dt = (float)(current_time - last_time);
+        last_time = current_time;
         // handle quit events like closing window or pressing escape
         if (events_quit()) {
             quit_renderer();
@@ -103,6 +112,16 @@ int main(int argc, char *argv[]) {
 
         // render to the physical screen
         update_display();
+
+        // rotate for next frame (scaled by delta time for frame-rate independence)
+        angle_x += 0.5f * dt;
+        angle_y += 1.0f * dt;
+        angle_z += 0.5f * dt;
+        
+        // wrap angles back to 0-2 PI range
+        angle_x = fmod(angle_x, TAU);
+        angle_y = fmod(angle_y, TAU);
+        angle_z = fmod(angle_z, TAU);
     }
 
     // prevent memory leaks
