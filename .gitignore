@@ -1,2 +1,11 @@
 # Compiled binaries
 *.out
+*.o
+graphix
+
+# Models
+models/*.obj
+!models/cube.obj
+
+# VSCode
+.vscode/
