@@ -1,5 +1,11 @@
 # Graphix
 
+## Demo
+
+<video controls width="100%" src="docs/demo.MOV">
+  Your browser does not support inline video. <a href="docs/demo.MOV">Download the demo</a>.
+</video>
+
 ## Dependencies
 
 ```bash

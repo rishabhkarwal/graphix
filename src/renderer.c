@@ -20,7 +20,7 @@ int init_renderer(int width, int height, const char *title) {
     if (!screen) return 0;
     
     glfwMakeContextCurrent(screen);
-    glfwSwapInterval(0); // 0 = unlocked fps, 1 = vsync (monitor refresh rate)
+    glfwSwapInterval(1); // 0 = unlocked fps, 1 = vsync (monitor refresh rate)
     
     // setup 2D cartesian orthographic view (origin at centre, y points up)
     glMatrixMode(GL_PROJECTION);
@@ -82,7 +82,7 @@ void update_display(void) {
         last_time = now;
         
         char title[64];
-        snprintf(title, sizeof(title), "%.2f", current_fps);
+        snprintf(title, sizeof(title), "FPS: %.0f", current_fps);
         glfwSetWindowTitle(screen, title); // write fps to title bar
     }
     
