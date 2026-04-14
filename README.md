@@ -2,7 +2,7 @@
 
 ## Demo
 
-[![Demo video preview](docs/demo.png)](docs/demo.MOV)
+![Demo](docs/demo.gif)
 
 ## Dependencies
 
