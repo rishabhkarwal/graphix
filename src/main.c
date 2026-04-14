@@ -46,6 +46,29 @@ point rotate_z(point position, float theta) {
     return (point){x * cos_theta - y * sin_theta, x * sin_theta + y * cos_theta, z};
 }
 
+point subtract(point a, point b) {
+    return (point){a.x - b.x, a.y - b.y, a.z - b.z};
+}
+
+point cross(point a, point b) {
+    return (point){
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x
+    };
+}
+
+float dot(point a, point b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+int triangle_contains_edge(triangle t, int start, int end) {
+    return
+        (t.a == start && t.b == end) || (t.a == end && t.b == start) ||
+        (t.b == start && t.c == end) || (t.b == end && t.c == start) ||
+        (t.c == start && t.a == end) || (t.c == end && t.a == start);
+}
+
 int main(int argc, char *argv[]) {
     // fallback to a default model if none presented
     const char *model_name = (argc > 1) ? argv[1] : "cube";
@@ -71,6 +94,8 @@ int main(int argc, char *argv[]) {
 
     // temporary storage for projected points each frame
     point *projected = malloc(sizeof(point) * m.point_count);
+    point *camera_space = malloc(sizeof(point) * m.point_count);
+    int *triangle_front = malloc(sizeof(int) * m.triangle_count);
 
     // track frame time for frame-rate independent rotation
     double last_time = glfwGetTime();
@@ -109,21 +134,67 @@ int main(int argc, char *argv[]) {
 
             rotated.z += delta; // apply depth offset
 
+            camera_space[i] = rotated;
+
             // map to flat 2D screen co-ordinates
             projected[i] = convert(rotated);
+        }
+
+        // classify triangles by camera-facing direction
+        point object_center = (point){0.0f, 0.0f, delta};
+        for (int i = 0; i < m.triangle_count; i++) {
+            triangle t = m.triangles[i];
+            point pa = camera_space[t.a];
+            point pb = camera_space[t.b];
+            point pc = camera_space[t.c];
+
+            point ab = subtract(pb, pa);
+            point ac = subtract(pc, pa);
+            point normal = cross(ab, ac);
+
+            point centroid = (point){
+                (pa.x + pb.x + pc.x) / 3.0f,
+                (pa.y + pb.y + pc.y) / 3.0f,
+                (pa.z + pb.z + pc.z) / 3.0f
+            };
+
+            point outward = subtract(centroid, object_center);
+            if (dot(normal, outward) < 0.0f) {
+                normal.x = -normal.x;
+                normal.y = -normal.y;
+                normal.z = -normal.z;
+            }
+
+            point to_camera = (point){-centroid.x, -centroid.y, -centroid.z};
+            float facing = dot(normal, to_camera);
+            triangle_front[i] = facing > 0.0f;
         }
 
         // draw either mesh edges or triangulation edges
         if (!triangle_view) {
             for (int i = 0; i < m.edge_count; i++) {
                 edge e = m.edges[i];
+
+                // hidden-line removal for convex wireframe
+                int visible = 0;
+                for (int j = 0; j < m.triangle_count; j++) {
+                    if (!triangle_front[j]) continue;
+                    if (triangle_contains_edge(m.triangles[j], e.start, e.end)) {
+                        visible = 1;
+                        break;
+                    }
+                }
+                if (!visible) continue;
+
                 point start = projected[e.start];
                 point end = projected[e.end];
                 draw_aaline(start, end, accent[0], accent[1], accent[2]);
             }
         } else {
             for (int i = 0; i < m.triangle_count; i++) {
+                if (!triangle_front[i]) continue;
                 triangle t = m.triangles[i];
+
                 point a = projected[t.a];
                 point b = projected[t.b];
                 point c = projected[t.c];
@@ -150,6 +221,8 @@ int main(int argc, char *argv[]) {
 
     // prevent memory leaks
     free(projected);
+    free(camera_space);
+    free(triangle_front);
     free_mesh(&m);
     return 0;
 }

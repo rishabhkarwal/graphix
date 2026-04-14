@@ -1,7 +1,5 @@
 # Graphix
 
-## Demo
-
 ![Demo](docs/demo.gif)
 
 ## Dependencies
