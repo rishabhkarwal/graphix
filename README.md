@@ -26,7 +26,7 @@ make
 | --- | --- |
 | **ESC** | Close window |
 | **SPACE** | Toggle wireframe |
-| **W/A/S/D** | Pan camera |
+| **Left Click + Drag** | Pan camera |
 | **Scroll** | Zoom in/out |
 | **R** | Reset camera to default position |
 | **+** | Increase subdivision level |

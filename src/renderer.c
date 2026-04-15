@@ -21,6 +21,9 @@ static double last_time = 0;
 static int frames = 0;
 static double current_fps = 60.0;
 static float scroll_offset = 0.0f;
+static double last_cursor_x = 0.0;
+static double last_cursor_y = 0.0;
+static int was_left_mouse_down = 0;
 
 static GLuint shader_program = 0;
 static GLint position_attr = -1;
@@ -270,6 +273,10 @@ int init_renderer(int width, int height, const char *title) {
     
     // set scroll callback for camera zoom
     glfwSetScrollCallback(screen, scroll_callback);
+
+    // initialise drag tracking from current cursor position
+    glfwGetCursorPos(screen, &last_cursor_x, &last_cursor_y);
+    was_left_mouse_down = 0;
     
     last_time = glfwGetTime();
     return 1;
@@ -307,6 +314,29 @@ int events_quit(void) {
 int key_down(int key) {
     if (!screen) return 0;
     return glfwGetKey(screen, key) == GLFW_PRESS;
+}
+
+// returns cursor delta while left mouse button is held
+void get_left_mouse_drag_delta(float *out_delta_x, float *out_delta_y) {
+    if (!out_delta_x || !out_delta_y) return;
+
+    *out_delta_x = 0.0f;
+    *out_delta_y = 0.0f;
+    if (!screen) return;
+
+    double cursor_x = 0.0;
+    double cursor_y = 0.0;
+    glfwGetCursorPos(screen, &cursor_x, &cursor_y);
+
+    int is_left_mouse_down = glfwGetMouseButton(screen, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    if (is_left_mouse_down && was_left_mouse_down) {
+        *out_delta_x = (float)(cursor_x - last_cursor_x);
+        *out_delta_y = (float)(cursor_y - last_cursor_y);
+    }
+
+    last_cursor_x = cursor_x;
+    last_cursor_y = cursor_y;
+    was_left_mouse_down = is_left_mouse_down;
 }
 
 // returns and resets accumulated scroll delta

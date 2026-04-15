@@ -498,6 +498,7 @@ int main(int argc, char *argv[]) {
     float camera_x = 0.0f;
     float camera_y = 0.0f;
     float camera_distance = delta;
+    float mouse_pan_sensitivity = -1.0f;
     int was_r_down = 0;
 
     // primary game loop
@@ -557,12 +558,12 @@ int main(int argc, char *argv[]) {
         was_plus_down = is_plus_down;
         was_minus_down = is_minus_down;
 
-        // handle camera movement (WASD) and reset (R)
-        float camera_speed = 180.0f;  // pixels per second
-        if (key_down(GLFW_KEY_W)) camera_y -= camera_speed * dt;
-        if (key_down(GLFW_KEY_S)) camera_y += camera_speed * dt;
-        if (key_down(GLFW_KEY_A)) camera_x += camera_speed * dt;
-        if (key_down(GLFW_KEY_D)) camera_x -= camera_speed * dt;
+        // pan camera by dragging while left mouse button is held
+        float drag_delta_x = 0.0f;
+        float drag_delta_y = 0.0f;
+        get_left_mouse_drag_delta(&drag_delta_x, &drag_delta_y);
+        camera_x += drag_delta_x * mouse_pan_sensitivity;
+        camera_y -= drag_delta_y * mouse_pan_sensitivity;
 
         // reset camera on R key press edge
         int is_r_down = key_down(GLFW_KEY_R);

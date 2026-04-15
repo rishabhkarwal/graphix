@@ -8,6 +8,7 @@ int init_renderer(int width, int height, const char *title);
 void quit_renderer(void);
 int events_quit(void);
 int key_down(int key);
+void get_left_mouse_drag_delta(float *out_delta_x, float *out_delta_y);
 float get_scroll_offset(void);
 int renderer_capture_framebuffer_ppm(const char *path);
 
