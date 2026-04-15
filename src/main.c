@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#include <limits.h>
 #include <GLFW/glfw3.h>
 
 #define WIDTH 600
@@ -30,11 +31,6 @@ typedef struct {
     int gpu_mesh_id;
     int built;
 } lod_mesh;
-
-typedef struct {
-    int a;
-    int b;
-} sorted_edge;
 
 point subtract(point a, point b);
 point cross(point a, point b);
@@ -112,12 +108,41 @@ void mat4_to_array(const mat4 *m, float out[16]) {
     }
 }
 
-int compare_sorted_edges(const void *lhs, const void *rhs) {
-    const sorted_edge *a = (const sorted_edge *)lhs;
-    const sorted_edge *b = (const sorted_edge *)rhs;
+static unsigned int edge_hash(int start, int end) {
+    return ((unsigned int)start * 73856093u) ^ ((unsigned int)end * 19349663u);
+}
 
-    if (a->a != b->a) return a->a - b->a;
-    return a->b - b->b;
+static int edge_bucket_count_for_items(int item_count) {
+    if (item_count < 0) return 0;
+
+    long long suggested = ((long long)item_count * 3LL) / 2LL + 1LL;
+    if (suggested < 17LL) suggested = 17LL;
+    if (suggested > INT_MAX) return 0;
+
+    return (int)suggested;
+}
+
+static int find_edge_index_hashed(
+    const edge *edges,
+    const int *buckets,
+    const int *next_indices,
+    int bucket_count,
+    int start,
+    int end
+) {
+    if (!edges || !buckets || !next_indices || bucket_count <= 0) return -1;
+
+    int bucket = (int)(edge_hash(start, end) % (unsigned int)bucket_count);
+    int edge_index = buckets[bucket];
+
+    while (edge_index >= 0) {
+        if (edges[edge_index].start == start && edges[edge_index].end == end) {
+            return edge_index;
+        }
+        edge_index = next_indices[edge_index];
+    }
+
+    return -1;
 }
 
 int build_unique_edges_from_triangles(const triangle *triangles, int triangle_count, edge **out_edges, int *out_edge_count) {
@@ -125,74 +150,78 @@ int build_unique_edges_from_triangles(const triangle *triangles, int triangle_co
     *out_edge_count = 0;
     if (triangle_count <= 0) return 1;
 
-    int pair_count = triangle_count * 3;
-    sorted_edge *pairs = malloc((size_t)pair_count * sizeof(sorted_edge));
-    if (!pairs) return 0;
+    if (triangle_count > INT_MAX / 3) return 0;
+    int max_edge_count = triangle_count * 3;
+    int bucket_count = edge_bucket_count_for_items(max_edge_count);
+    if (bucket_count <= 0) return 0;
 
-    int p = 0;
-    for (int i = 0; i < triangle_count; i++) {
-        triangle t = triangles[i];
-
-        int a0 = t.a < t.b ? t.a : t.b;
-        int b0 = t.a < t.b ? t.b : t.a;
-        pairs[p++] = (sorted_edge){a0, b0};
-
-        int a1 = t.b < t.c ? t.b : t.c;
-        int b1 = t.b < t.c ? t.c : t.b;
-        pairs[p++] = (sorted_edge){a1, b1};
-
-        int a2 = t.c < t.a ? t.c : t.a;
-        int b2 = t.c < t.a ? t.a : t.c;
-        pairs[p++] = (sorted_edge){a2, b2};
-    }
-
-    qsort(pairs, (size_t)pair_count, sizeof(sorted_edge), compare_sorted_edges);
-
-    int unique_count = 0;
-    for (int i = 0; i < pair_count; i++) {
-        if (i == 0 || pairs[i].a != pairs[i - 1].a || pairs[i].b != pairs[i - 1].b) {
-            unique_count++;
-        }
-    }
-
-    edge *unique_edges = malloc((size_t)unique_count * sizeof(edge));
-    if (!unique_edges) {
-        free(pairs);
+    edge *unique_edges = malloc((size_t)max_edge_count * sizeof(edge));
+    int *next_indices = malloc((size_t)max_edge_count * sizeof(int));
+    int *buckets = malloc((size_t)bucket_count * sizeof(int));
+    if (!unique_edges || !next_indices || !buckets) {
+        free(unique_edges);
+        free(next_indices);
+        free(buckets);
         return 0;
     }
 
-    int out_index = 0;
-    for (int i = 0; i < pair_count; i++) {
-        if (i > 0 && pairs[i].a == pairs[i - 1].a && pairs[i].b == pairs[i - 1].b) continue;
-        unique_edges[out_index++] = (edge){pairs[i].a, pairs[i].b};
+    for (int i = 0; i < bucket_count; i++) {
+        buckets[i] = -1;
     }
 
-    free(pairs);
+    int unique_count = 0;
+    for (int i = 0; i < triangle_count; i++) {
+        triangle t = triangles[i];
+
+        int edge_starts[3];
+        int edge_ends[3];
+
+        edge_starts[0] = t.a < t.b ? t.a : t.b;
+        edge_ends[0] = t.a < t.b ? t.b : t.a;
+
+        edge_starts[1] = t.b < t.c ? t.b : t.c;
+        edge_ends[1] = t.b < t.c ? t.c : t.b;
+
+        edge_starts[2] = t.c < t.a ? t.c : t.a;
+        edge_ends[2] = t.c < t.a ? t.a : t.c;
+
+        for (int edge_i = 0; edge_i < 3; edge_i++) {
+            int start = edge_starts[edge_i];
+            int end = edge_ends[edge_i];
+            int bucket = (int)(edge_hash(start, end) % (unsigned int)bucket_count);
+            int existing = buckets[bucket];
+            int found = 0;
+
+            while (existing >= 0) {
+                if (unique_edges[existing].start == start && unique_edges[existing].end == end) {
+                    found = 1;
+                    break;
+                }
+                existing = next_indices[existing];
+            }
+
+            if (!found) {
+                int new_index = unique_count++;
+                unique_edges[new_index] = (edge){start, end};
+                next_indices[new_index] = buckets[bucket];
+                buckets[bucket] = new_index;
+            }
+        }
+    }
+
+    free(next_indices);
+    free(buckets);
+
+    if (unique_count > 0) {
+        edge *shrunk = realloc(unique_edges, (size_t)unique_count * sizeof(edge));
+        if (shrunk) {
+            unique_edges = shrunk;
+        }
+    }
+
     *out_edges = unique_edges;
     *out_edge_count = unique_count;
     return 1;
-}
-
-int find_edge_index(const edge *edges, int edge_count, int start, int end) {
-    int low = 0;
-    int high = edge_count - 1;
-
-    while (low <= high) {
-        int mid = (low + high) / 2;
-        edge e = edges[mid];
-
-        if (e.start == start && e.end == end) {
-            return mid;
-        }
-
-        if (e.start < start || (e.start == start && e.end < end)) {
-            low = mid + 1;
-        } else {
-            high = mid - 1;
-        }
-    }
-
-    return -1;
 }
 
 void free_lod_mesh(lod_mesh *lod) {
@@ -279,6 +308,32 @@ int build_next_lod(const lod_mesh *previous, lod_mesh *next) {
         next->points[previous->point_count + i] = midpoint(previous->points[a], previous->points[b]);
     }
 
+    int source_bucket_count = edge_bucket_count_for_items(source_edge_count);
+    if (source_bucket_count <= 0) {
+        return 0;
+    }
+
+    int *source_next_indices = malloc((size_t)source_edge_count * sizeof(int));
+    int *source_buckets = malloc((size_t)source_bucket_count * sizeof(int));
+    if (!source_next_indices || !source_buckets) {
+        free(source_next_indices);
+        free(source_buckets);
+        return 0;
+    }
+
+    for (int i = 0; i < source_bucket_count; i++) {
+        source_buckets[i] = -1;
+    }
+
+    for (int i = 0; i < source_edge_count; i++) {
+        int start = source_edges[i].start;
+        int end = source_edges[i].end;
+        int bucket = (int)(edge_hash(start, end) % (unsigned int)source_bucket_count);
+
+        source_next_indices[i] = source_buckets[bucket];
+        source_buckets[bucket] = i;
+    }
+
     int out_triangle_index = 0;
     for (int i = 0; i < previous->triangle_count; i++) {
         triangle t = previous->triangles[i];
@@ -290,11 +345,13 @@ int build_next_lod(const lod_mesh *previous, lod_mesh *next) {
         int ca_start = t.c < t.a ? t.c : t.a;
         int ca_end = t.c < t.a ? t.a : t.c;
 
-        int ab = find_edge_index(source_edges, source_edge_count, ab_start, ab_end);
-        int bc = find_edge_index(source_edges, source_edge_count, bc_start, bc_end);
-        int ca = find_edge_index(source_edges, source_edge_count, ca_start, ca_end);
+        int ab = find_edge_index_hashed(source_edges, source_buckets, source_next_indices, source_bucket_count, ab_start, ab_end);
+        int bc = find_edge_index_hashed(source_edges, source_buckets, source_next_indices, source_bucket_count, bc_start, bc_end);
+        int ca = find_edge_index_hashed(source_edges, source_buckets, source_next_indices, source_bucket_count, ca_start, ca_end);
 
         if (ab < 0 || bc < 0 || ca < 0) {
+            free(source_next_indices);
+            free(source_buckets);
             return 0;
         }
 
@@ -307,6 +364,9 @@ int build_next_lod(const lod_mesh *previous, lod_mesh *next) {
         next->triangles[out_triangle_index++] = (triangle){ca_index, bc_index, t.c};
         next->triangles[out_triangle_index++] = (triangle){ab_index, bc_index, ca_index};
     }
+
+    free(source_next_indices);
+    free(source_buckets);
 
     if (!build_unique_edges_from_triangles(next->triangles, next->triangle_count, &next->edges, &next->edge_count)) {
         return 0;
