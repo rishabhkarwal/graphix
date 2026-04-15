@@ -136,6 +136,7 @@ int midpoint_channel(int a, int b) {
 }
 
 float point_distance_squared(point a, point b) {
+    // compare distances without paying for a square root
     float dx = a.x - b.x;
     float dy = a.y - b.y;
     float dz = a.z - b.z;
@@ -143,6 +144,7 @@ float point_distance_squared(point a, point b) {
 }
 
 int triangle_front_facing(point a, point b, point c) {
+    // use the triangle normal and centroid to decide whether it faces the camera
     point ab = subtract(b, a);
     point ac = subtract(c, a);
     point normal = cross(ab, ac);
@@ -158,6 +160,7 @@ int triangle_front_facing(point a, point b, point c) {
 }
 
 float triangle_max_projected_edge_length_squared(point a, point b, point c) {
+    // stop subdividing once the triangle is already small in screen space
     point projected_a = convert(a);
     point projected_b = convert(b);
     point projected_c = convert(c);
@@ -208,6 +211,7 @@ void draw_subdivided_triangle(
     static subdivided_triangle_task tasks[1 << (MAX_SUBDIVIDE_LEVEL * 2)];
     int task_count = 0;
 
+    // explicit task stack avoids recursive subdivision and keeps call overhead down
     tasks[task_count++] = (subdivided_triangle_task){
         a,
         b,
@@ -227,6 +231,7 @@ void draw_subdivided_triangle(
     while (task_count > 0) {
         subdivided_triangle_task task = tasks[--task_count];
 
+        // project once for the current task so both the size test and final draw reuse it
         point projected_a = convert(task.a);
         point projected_b = convert(task.b);
         point projected_c = convert(task.c);
@@ -349,11 +354,13 @@ void draw_subdivided_wireframe_triangle(point a, point b, point c, int level, fl
     static subdivided_wireframe_task tasks[1 << (MAX_SUBDIVIDE_LEVEL * 2)];
     int task_count = 0;
 
+    // wireframe uses the same explicit stack structure as shaded subdivision
     tasks[task_count++] = (subdivided_wireframe_task){a, b, c, level};
 
     while (task_count > 0) {
         subdivided_wireframe_task task = tasks[--task_count];
 
+        // project once for both the cutoff test and the final line draw
         point projected_a = convert(task.a);
         point projected_b = convert(task.b);
         point projected_c = convert(task.c);
@@ -557,6 +564,7 @@ int main(int argc, char *argv[]) {
 
             triangle_depth[i] = centroid.z;
 
+            // keep normals pointing away from the object centre before doing lighting
             point outward = subtract(centroid, object_centre);
             if (dot(normal, outward) < 0.0f) {
                 normal.x = -normal.x;

@@ -16,6 +16,7 @@ static float scroll_offset = 0.0f;
 static void scroll_callback(GLFWwindow *window, double xoffset, double yoffset) {
     (void)window;
     (void)xoffset;
+    // accumulate wheel movement so the main loop can consume it once per frame
     scroll_offset += (float)yoffset;
 }
 
@@ -84,6 +85,7 @@ void fill_background(int r, int g, int b) {
 
 void begin_triangle_batch(void) {
     if (triangle_batch_active) return;
+    // keep a single glBegin/glEnd open across many triangle submissions
     glBegin(GL_TRIANGLES);
     triangle_batch_active = 1;
 }
@@ -96,6 +98,7 @@ void end_triangle_batch(void) {
 
 void begin_line_batch(void) {
     if (line_batch_active) return;
+    // same batching approach for wireframe line submission
     glBegin(GL_LINES);
     line_batch_active = 1;
 }
