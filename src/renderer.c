@@ -27,6 +27,7 @@ int init_renderer(int width, int height, const char *title) {
     glLoadIdentity();
     glOrtho(-width / 2.0, width / 2.0, -height / 2.0, height / 2.0, -1.0, 1.0);
     glMatrixMode(GL_MODELVIEW);
+    glShadeModel(GL_SMOOTH);
     
     // enable anti-aliasing for smooth lines
     glEnable(GL_LINE_SMOOTH);
@@ -63,12 +64,29 @@ void fill_background(int r, int g, int b) {
     glClear(GL_COLOR_BUFFER_BIT);
 }
 
-void draw_triangle(point a, point b, point c, int red, int green, int blue) {
-    // draws a filled triangle using projected 2D co-ordinates
-    glColor3f(red / 255.0f, green / 255.0f, blue / 255.0f);
+void draw_triangle(
+    point a,
+    point b,
+    point c,
+    int red_a,
+    int green_a,
+    int blue_a,
+    int red_b,
+    int green_b,
+    int blue_b,
+    int red_c,
+    int green_c,
+    int blue_c
+) {
+    // draws a triangle with per-vertex colours for smooth shading
     glBegin(GL_TRIANGLES);
+    glColor3f(red_a / 255.0f, green_a / 255.0f, blue_a / 255.0f);
     glVertex2f(a.x, a.y);
+
+    glColor3f(red_b / 255.0f, green_b / 255.0f, blue_b / 255.0f);
     glVertex2f(b.x, b.y);
+
+    glColor3f(red_c / 255.0f, green_c / 255.0f, blue_c / 255.0f);
     glVertex2f(c.x, c.y);
     glEnd();
 }

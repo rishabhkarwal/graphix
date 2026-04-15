@@ -10,6 +10,7 @@
 #define PI 3.14159265359f
 #define TAU (2.0f * PI)
 #define EPSILON 0.000001f
+#define NORMAL_SIMILARITY_THRESHOLD 0.70710678f // cos(45) - only smooth across edges where angle is at most about 45
 
 int background[3] = {0, 0, 0};
 int accent[3]     = {255, 255, 255};
@@ -64,11 +65,60 @@ float dot(point a, point b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
+point normalise(point v) {
+    float length = sqrtf(dot(v, v));
+    if (length <= EPSILON) return (point){0.0f, 0.0f, 0.0f};
+    return (point){v.x / length, v.y / length, v.z / length};
+}
+
 int triangle_contains_edge(triangle t, int start, int end) {
     return
         (t.a == start && t.b == end) || (t.a == end && t.b == start) ||
         (t.b == start && t.c == end) || (t.b == end && t.c == start) ||
         (t.c == start && t.a == end) || (t.c == end && t.a == start);
+}
+
+int triangle_contains_vertex(triangle t, int vertex_index) {
+    return t.a == vertex_index || t.b == vertex_index || t.c == vertex_index;
+}
+
+point averaged_vertex_normal(
+    int vertex_index,
+    point reference_normal,
+    triangle *triangles,
+    point *triangle_normal,
+    int triangle_count
+) {
+    point sum = {0.0f, 0.0f, 0.0f};
+
+    for (int i = 0; i < triangle_count; i++) {
+        if (!triangle_contains_vertex(triangles[i], vertex_index)) continue;
+
+        float normal_similarity = dot(triangle_normal[i], reference_normal);
+        if (normal_similarity < NORMAL_SIMILARITY_THRESHOLD) continue;
+
+        sum.x += triangle_normal[i].x;
+        sum.y += triangle_normal[i].y;
+        sum.z += triangle_normal[i].z;
+    }
+
+    point averaged = normalise(sum);
+    if (dot(averaged, averaged) <= EPSILON) return reference_normal;
+    return averaged;
+}
+
+float lambert_intensity(point normal, point position) {
+    // light source is fixed at origin
+    point to_light = normalise((point){-position.x, -position.y, -position.z});
+
+    float diffuse = dot(normal, to_light);
+    if (diffuse < 0.0f) diffuse = 0.0f;
+
+    const float ambient = 0.15f;
+    const float diffuse_strength = 0.85f;
+    float intensity = ambient + diffuse_strength * diffuse;
+    if (intensity > 1.0f) intensity = 1.0f;
+    return intensity;
 }
 
 int main(int argc, char *argv[]) {
@@ -97,10 +147,10 @@ int main(int argc, char *argv[]) {
     // temporary storage for projected points each frame
     point *projected = malloc(sizeof(point) * m.point_count);
     point *camera_space = malloc(sizeof(point) * m.point_count);
+    point *triangle_normal = malloc(sizeof(point) * m.triangle_count);
     int *triangle_front = malloc(sizeof(int) * m.triangle_count);
     int *triangle_order = malloc(sizeof(int) * m.triangle_count);
     float *triangle_depth = malloc(sizeof(float) * m.triangle_count);
-    float *triangle_shade = malloc(sizeof(float) * m.triangle_count);
 
     // track frame time for frame-rate independent rotation
     double last_time = glfwGetTime();
@@ -146,7 +196,8 @@ int main(int argc, char *argv[]) {
         }
 
         // classify triangles by camera-facing direction
-        point object_center = (point){0.0f, 0.0f, delta};
+        point object_centre = (point){0.0f, 0.0f, delta};
+
         for (int i = 0; i < m.triangle_count; i++) {
             triangle t = m.triangles[i];
             point pa = camera_space[t.a];
@@ -165,32 +216,19 @@ int main(int argc, char *argv[]) {
 
             triangle_depth[i] = centroid.z;
 
-            point outward = subtract(centroid, object_center);
+            point outward = subtract(centroid, object_centre);
             if (dot(normal, outward) < 0.0f) {
                 normal.x = -normal.x;
                 normal.y = -normal.y;
                 normal.z = -normal.z;
             }
 
+            normal = normalise(normal);
+            triangle_normal[i] = normal;
+
             point to_camera = (point){-centroid.x, -centroid.y, -centroid.z};
             float facing = dot(normal, to_camera);
             triangle_front[i] = facing > 0.0f;
-
-            // flat lambert shading from light at camera origin
-            float normal_length = sqrtf(dot(normal, normal));
-            float light_length = sqrtf(dot(to_camera, to_camera));
-            float diffuse = 0.0f;
-            if (normal_length > EPSILON && light_length > EPSILON) {
-                diffuse = dot(normal, to_camera) / (normal_length * light_length);
-                if (diffuse < 0.0f) diffuse = 0.0f;
-            }
-
-            // ambient + diffuse balance
-            const float ambient = 0.15f;
-            const float diffuse_strength = 0.85f;
-            float intensity = ambient + diffuse_strength * diffuse;
-            if (intensity > 1.0f) intensity = 1.0f;
-            triangle_shade[i] = intensity;
         }
 
         // draw either mesh edges or triangulation edges
@@ -221,10 +259,60 @@ int main(int argc, char *argv[]) {
                 point b = projected[t.b];
                 point c = projected[t.c];
 
-                int red = (int)(face_base_colour[0] * triangle_shade[t_index]);
-                int green = (int)(face_base_colour[1] * triangle_shade[t_index]);
-                int blue = (int)(face_base_colour[2] * triangle_shade[t_index]);
-                draw_triangle(a, b, c, red, green, blue);
+                point base_normal = triangle_normal[t_index];
+
+                point normal_a = averaged_vertex_normal(
+                    t.a,
+                    base_normal,
+                    m.triangles,
+                    triangle_normal,
+                    m.triangle_count
+                );
+                point normal_b = averaged_vertex_normal(
+                    t.b,
+                    base_normal,
+                    m.triangles,
+                    triangle_normal,
+                    m.triangle_count
+                );
+                point normal_c = averaged_vertex_normal(
+                    t.c,
+                    base_normal,
+                    m.triangles,
+                    triangle_normal,
+                    m.triangle_count
+                );
+
+                float shade_a = lambert_intensity(normal_a, camera_space[t.a]);
+                float shade_b = lambert_intensity(normal_b, camera_space[t.b]);
+                float shade_c = lambert_intensity(normal_c, camera_space[t.c]);
+
+                int red_a = (int)(face_base_colour[0] * shade_a);
+                int green_a = (int)(face_base_colour[1] * shade_a);
+                int blue_a = (int)(face_base_colour[2] * shade_a);
+
+                int red_b = (int)(face_base_colour[0] * shade_b);
+                int green_b = (int)(face_base_colour[1] * shade_b);
+                int blue_b = (int)(face_base_colour[2] * shade_b);
+
+                int red_c = (int)(face_base_colour[0] * shade_c);
+                int green_c = (int)(face_base_colour[1] * shade_c);
+                int blue_c = (int)(face_base_colour[2] * shade_c);
+
+                draw_triangle(
+                    a,
+                    b,
+                    c,
+                    red_a,
+                    green_a,
+                    blue_a,
+                    red_b,
+                    green_b,
+                    blue_b,
+                    red_c,
+                    green_c,
+                    blue_c
+                );
             }
 
             // overlay visible wireframe edges
@@ -278,10 +366,10 @@ int main(int argc, char *argv[]) {
     // prevent memory leaks
     free(projected);
     free(camera_space);
+    free(triangle_normal);
     free(triangle_front);
     free(triangle_order);
     free(triangle_depth);
-    free(triangle_shade);
     free_mesh(&m);
     return 0;
 }
