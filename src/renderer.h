@@ -8,6 +8,7 @@ int init_renderer(int width, int height, const char *title);
 void quit_renderer(void);
 int events_quit(void);
 int key_down(int key);
+float get_scroll_offset(void);
 
 // drawing functions
 void fill_background(int r, int g, int b);

@@ -146,7 +146,9 @@ void draw_subdivided_triangle(
     int red_c,
     int green_c,
     int blue_c,
-    int level
+    int level,
+    float camera_x,
+    float camera_y
 ) {
     typedef struct {
         point a;
@@ -191,6 +193,13 @@ void draw_subdivided_triangle(
             point projected_a = convert(task.a);
             point projected_b = convert(task.b);
             point projected_c = convert(task.c);
+
+            projected_a.x += camera_x;
+            projected_a.y += camera_y;
+            projected_b.x += camera_x;
+            projected_b.y += camera_y;
+            projected_c.x += camera_x;
+            projected_c.y += camera_y;
 
             draw_triangle(
                 projected_a,
@@ -288,7 +297,7 @@ void draw_subdivided_triangle(
     }
 }
 
-void draw_subdivided_wireframe_triangle(point a, point b, point c, int level) {
+void draw_subdivided_wireframe_triangle(point a, point b, point c, int level, float camera_x, float camera_y) {
     typedef struct {
         point a;
         point b;
@@ -309,6 +318,13 @@ void draw_subdivided_wireframe_triangle(point a, point b, point c, int level) {
             point projected_a = convert(task.a);
             point projected_b = convert(task.b);
             point projected_c = convert(task.c);
+
+            projected_a.x += camera_x;
+            projected_a.y += camera_y;
+            projected_b.x += camera_x;
+            projected_b.y += camera_y;
+            projected_c.x += camera_x;
+            projected_c.y += camera_y;
 
             draw_aaline(projected_a, projected_b, accent[0], accent[1], accent[2]);
             draw_aaline(projected_b, projected_c, accent[0], accent[1], accent[2]);
@@ -395,6 +411,12 @@ int main(int argc, char *argv[]) {
     int was_plus_down = 0;
     int was_minus_down = 0;
 
+    // camera position (screen space offsets and zoom)
+    float camera_x = 0.0f;
+    float camera_y = 0.0f;
+    float camera_distance = delta;
+    int was_r_down = 0;
+
     // primary game loop
     while (1) {
         double current_time = glfwGetTime();
@@ -429,6 +451,27 @@ int main(int argc, char *argv[]) {
         was_plus_down = is_plus_down;
         was_minus_down = is_minus_down;
 
+        // handle camera movement (WASD) and reset (R)
+        float camera_speed = 180.0f;  // pixels per second
+        if (key_down(GLFW_KEY_W)) camera_y -= camera_speed * dt;
+        if (key_down(GLFW_KEY_S)) camera_y += camera_speed * dt;
+        if (key_down(GLFW_KEY_A)) camera_x += camera_speed * dt;
+        if (key_down(GLFW_KEY_D)) camera_x -= camera_speed * dt;
+
+        // reset camera on R key press edge
+        int is_r_down = key_down(GLFW_KEY_R);
+        if (is_r_down && !was_r_down) {
+            camera_x = 0.0f;
+            camera_y = 0.0f;
+            camera_distance = delta;
+        }
+        was_r_down = is_r_down;
+
+        // handle camera zoom (scroll wheel)
+        float scroll = get_scroll_offset();
+        camera_distance -= scroll * 0.5f;
+        if (camera_distance < 0.0f) camera_distance = 0.0f; // clamp at z = 0
+
         // wipe previous frame with solid colour
         fill_background(background[0], background[1], background[2]);
 
@@ -439,16 +482,19 @@ int main(int argc, char *argv[]) {
             rotated = rotate_y(rotated, angle_y);
             rotated = rotate_z(rotated, angle_z);
 
-            rotated.z += delta; // apply depth offset
+            rotated.z += camera_distance; // apply camera distance offset
 
             camera_space[i] = rotated;
 
-            // map to flat 2D screen co-ordinates
-            projected[i] = convert(rotated);
+            // map to flat 2D screen co-ordinates and apply camera pan
+            point proj = convert(rotated);
+            proj.x += camera_x;
+            proj.y += camera_y;
+            projected[i] = proj;
         }
 
         // classify triangles by camera-facing direction
-        point object_centre = (point){0.0f, 0.0f, delta};
+        point object_centre = (point){0.0f, 0.0f, camera_distance};
 
         for (int i = 0; i < m.triangle_count; i++) {
             triangle t = m.triangles[i];
@@ -582,7 +628,9 @@ int main(int argc, char *argv[]) {
                         red_c,
                         green_c,
                         blue_c,
-                        subdivision_level
+                        subdivision_level,
+                        camera_x,
+                        camera_y
                     );
                 }
             }
@@ -597,7 +645,7 @@ int main(int argc, char *argv[]) {
                 point camera_a = camera_space[t.a];
                 point camera_b = camera_space[t.b];
                 point camera_c = camera_space[t.c];
-                draw_subdivided_wireframe_triangle(camera_a, camera_b, camera_c, subdivision_level);
+                draw_subdivided_wireframe_triangle(camera_a, camera_b, camera_c, subdivision_level, camera_x, camera_y);
             }
             end_line_batch();
         }

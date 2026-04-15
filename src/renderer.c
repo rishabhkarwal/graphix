@@ -11,6 +11,13 @@ static int frames = 0;
 static double current_fps = 60.0;
 static int triangle_batch_active = 0;
 static int line_batch_active = 0;
+static float scroll_offset = 0.0f;
+
+static void scroll_callback(GLFWwindow *window, double xoffset, double yoffset) {
+    (void)window;
+    (void)xoffset;
+    scroll_offset += (float)yoffset;
+}
 
 int init_renderer(int width, int height, const char *title) {
     WIDTH = width; HEIGHT = height;
@@ -36,6 +43,9 @@ int init_renderer(int width, int height, const char *title) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     
+    // set scroll callback for camera zoom
+    glfwSetScrollCallback(screen, scroll_callback);
+    
     last_time = glfwGetTime();
     return 1;
 }
@@ -58,6 +68,12 @@ int events_quit(void) {
 int key_down(int key) {
     if (!screen) return 0;
     return glfwGetKey(screen, key) == GLFW_PRESS;
+}
+
+float get_scroll_offset(void) {
+    float result = scroll_offset;
+    scroll_offset = 0.0f;
+    return result;
 }
 
 void fill_background(int r, int g, int b) {
