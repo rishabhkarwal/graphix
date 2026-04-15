@@ -1,9 +1,9 @@
 #ifndef TYPES_H
 #define TYPES_H
 
-// 3D point in space
+// homogeneous 3D point/vector (w = 1 for positions, w = 0 for direction vectors)
 typedef struct {
-    float x, y, z;
+    float x, y, z, w;
 } point;
 
 // connection between two points

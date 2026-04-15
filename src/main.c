@@ -19,11 +19,15 @@ int background[3] = {0, 0, 0};
 int accent[3]     = {255, 255, 255};
 int face_base_colour[3] = {200, 200, 200};
 
+typedef struct {
+    float m[4][4];
+} mat4;
+
 point project(point position, float scale) {
     // projects 3D co-ordinate to 2D plane
     float x = position.x, y = position.y, z = position.z;
     if (z == 0) z = 0.1f;
-    return (point){x * scale / z, y * scale / z, z};
+    return (point){x * scale / z, y * scale / z, z, 1.0f};
 }
 
 point convert(point position) {
@@ -31,36 +35,90 @@ point convert(point position) {
     return project(position, 800.0f);
 }
 
-point rotate_x(point position, float theta) {
-    // rotates around the x-axis
-    float x = position.x, y = position.y, z = position.z;
-    float sin_theta = sin(theta), cos_theta = cos(theta);
-    return (point){x, y * cos_theta - z * sin_theta, y * sin_theta + z * cos_theta};
+mat4 mat4_identity(void) {
+    mat4 out = {{{0}}};
+    out.m[0][0] = 1.0f;
+    out.m[1][1] = 1.0f;
+    out.m[2][2] = 1.0f;
+    out.m[3][3] = 1.0f;
+    return out;
 }
 
-point rotate_y(point position, float theta) {
-    // rotates around the y-axis
-    float x = position.x, y = position.y, z = position.z;
-    float sin_theta = sin(theta), cos_theta = cos(theta);
-    return (point){x * cos_theta + z * sin_theta, y, -x * sin_theta + z * cos_theta};
+mat4 mat4_multiply(mat4 a, mat4 b) {
+    mat4 out = {{{0}}};
+
+    for (int row = 0; row < 4; row++) {
+        for (int col = 0; col < 4; col++) {
+            float value = 0.0f;
+            for (int k = 0; k < 4; k++) {
+                value += a.m[row][k] * b.m[k][col];
+            }
+            out.m[row][col] = value;
+        }
+    }
+
+    return out;
 }
 
-point rotate_z(point position, float theta) {
-    // rotates around the z-axis
-    float x = position.x, y = position.y, z = position.z;
-    float sin_theta = sin(theta), cos_theta = cos(theta);
-    return (point){x * cos_theta - y * sin_theta, x * sin_theta + y * cos_theta, z};
+point mat4_mul_point(mat4 m, point v) {
+    return (point){
+        m.m[0][0] * v.x + m.m[0][1] * v.y + m.m[0][2] * v.z + m.m[0][3] * v.w,
+        m.m[1][0] * v.x + m.m[1][1] * v.y + m.m[1][2] * v.z + m.m[1][3] * v.w,
+        m.m[2][0] * v.x + m.m[2][1] * v.y + m.m[2][2] * v.z + m.m[2][3] * v.w,
+        m.m[3][0] * v.x + m.m[3][1] * v.y + m.m[3][2] * v.z + m.m[3][3] * v.w
+    };
+}
+
+mat4 build_transform_matrix(float pitch, float yaw, float roll, point translation) {
+    // combined rotation (Rz * Ry * Rx) plus translation in one matrix
+    float sx = sinf(pitch), cx = cosf(pitch);
+    float sy = sinf(yaw), cy = cosf(yaw);
+    float sz = sinf(roll), cz = cosf(roll);
+
+    mat4 out = mat4_identity();
+
+    out.m[0][0] = cz * cy;
+    out.m[0][1] = cz * sy * sx - sz * cx;
+    out.m[0][2] = cz * sy * cx + sz * sx;
+
+    out.m[1][0] = sz * cy;
+    out.m[1][1] = sz * sy * sx + cz * cx;
+    out.m[1][2] = sz * sy * cx - cz * sx;
+
+    out.m[2][0] = -sy;
+    out.m[2][1] = cy * sx;
+    out.m[2][2] = cy * cx;
+
+    out.m[0][3] = translation.x;
+    out.m[1][3] = translation.y;
+    out.m[2][3] = translation.z;
+    return out;
+}
+
+point transform_point(mat4 transform, point p) {
+    point in = p;
+    if (fabsf(in.w) <= EPSILON) in.w = 1.0f;
+
+    point out = mat4_mul_point(transform, in);
+
+    if (fabsf(out.w) <= EPSILON) {
+        return (point){out.x, out.y, out.z, 1.0f};
+    }
+
+    float inv_w = 1.0f / out.w;
+    return (point){out.x * inv_w, out.y * inv_w, out.z * inv_w, 1.0f};
 }
 
 point subtract(point a, point b) {
-    return (point){a.x - b.x, a.y - b.y, a.z - b.z};
+    return (point){a.x - b.x, a.y - b.y, a.z - b.z, 0.0f};
 }
 
 point cross(point a, point b) {
     return (point){
         a.y * b.z - a.z * b.y,
         a.z * b.x - a.x * b.z,
-        a.x * b.y - a.y * b.x
+        a.x * b.y - a.y * b.x,
+        0.0f
     };
 }
 
@@ -70,8 +128,8 @@ float dot(point a, point b) {
 
 point normalise(point v) {
     float length = sqrtf(dot(v, v));
-    if (length <= EPSILON) return (point){0.0f, 0.0f, 0.0f};
-    return (point){v.x / length, v.y / length, v.z / length};
+    if (length <= EPSILON) return (point){0.0f, 0.0f, 0.0f, 0.0f};
+    return (point){v.x / length, v.y / length, v.z / length, 0.0f};
 }
 
 int triangle_contains_edge(triangle t, int start, int end) {
@@ -91,7 +149,7 @@ point averaged_vertex_normal(
     const mesh *m,
     const point *triangle_normal
 ) {
-    point sum = {0.0f, 0.0f, 0.0f};
+    point sum = {0.0f, 0.0f, 0.0f, 0.0f};
 
     if (m->vertex_adjacencies) {
         vertex_adjacency adjacency = m->vertex_adjacencies[vertex_index];
@@ -126,7 +184,7 @@ point averaged_vertex_normal(
 
 float lambert_intensity(point normal, point position) {
     // light source is fixed at origin
-    point to_light = normalise((point){-position.x, -position.y, -position.z});
+    point to_light = normalise((point){-position.x, -position.y, -position.z, 0.0f});
 
     float diffuse = dot(normal, to_light);
     if (diffuse < 0.0f) diffuse = 0.0f;
@@ -142,7 +200,8 @@ point midpoint(point a, point b) {
     return (point){
         (a.x + b.x) * 0.5f,
         (a.y + b.y) * 0.5f,
-        (a.z + b.z) * 0.5f
+        (a.z + b.z) * 0.5f,
+        1.0f
     };
 }
 
@@ -166,10 +225,11 @@ int triangle_front_facing(point a, point b, point c) {
     point centroid = (point){
         (a.x + b.x + c.x) / 3.0f,
         (a.y + b.y + c.y) / 3.0f,
-        (a.z + b.z + c.z) / 3.0f
+        (a.z + b.z + c.z) / 3.0f,
+        1.0f
     };
 
-    point to_camera = (point){-centroid.x, -centroid.y, -centroid.z};
+    point to_camera = (point){-centroid.x, -centroid.y, -centroid.z, 0.0f};
     return dot(normal, to_camera) > 0.0f;
 }
 
@@ -537,26 +597,28 @@ int main(int argc, char *argv[]) {
         // wipe previous frame with solid colour
         fill_background(background[0], background[1], background[2]);
 
+        // build one matrix from pitch/yaw/roll and translation, then apply in one step
+        mat4 model_to_camera = build_transform_matrix(
+            angle_x,
+            angle_y,
+            angle_z,
+            (point){0.0f, 0.0f, camera_distance, 1.0f}
+        );
+
         // process math for each point in 3D space
         for (int i = 0; i < m.point_count; i++) {
-            point p = m.points[i];
-            point rotated = rotate_x(p, angle_x);
-            rotated = rotate_y(rotated, angle_y);
-            rotated = rotate_z(rotated, angle_z);
-
-            rotated.z += camera_distance; // apply camera distance offset
-
-            camera_space[i] = rotated;
+            point transformed = transform_point(model_to_camera, m.points[i]);
+            camera_space[i] = transformed;
 
             // map to flat 2D screen co-ordinates and apply camera pan
-            point proj = convert(rotated);
+            point proj = convert(transformed);
             proj.x += camera_x;
             proj.y += camera_y;
             projected[i] = proj;
         }
 
         // classify triangles by camera-facing direction
-        point object_centre = (point){0.0f, 0.0f, camera_distance};
+        point object_centre = (point){0.0f, 0.0f, camera_distance, 1.0f};
 
         for (int i = 0; i < m.triangle_count; i++) {
             triangle t = m.triangles[i];
@@ -571,7 +633,8 @@ int main(int argc, char *argv[]) {
             point centroid = (point){
                 (pa.x + pb.x + pc.x) / 3.0f,
                 (pa.y + pb.y + pc.y) / 3.0f,
-                (pa.z + pb.z + pc.z) / 3.0f
+                (pa.z + pb.z + pc.z) / 3.0f,
+                1.0f
             };
 
             // keep normals pointing away from the object centre before doing lighting
@@ -585,7 +648,7 @@ int main(int argc, char *argv[]) {
             normal = normalise(normal);
             triangle_normal[i] = normal;
 
-            point to_camera = (point){-centroid.x, -centroid.y, -centroid.z};
+            point to_camera = (point){-centroid.x, -centroid.y, -centroid.z, 0.0f};
             float facing = dot(normal, to_camera);
             triangle_front[i] = facing > 0.0f;
         }

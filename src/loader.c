@@ -32,7 +32,7 @@ mesh load_obj(const char *filename) {
                     point_cap *= 2;
                     points = realloc(points, point_cap * sizeof(point));
                 }
-                points[point_count++] = (point){x, y, z};
+                points[point_count++] = (point){x, y, z, 1.0f};
             }
         } else if (line[0] == 'f' && line[1] == ' ') {
             face_count++;
