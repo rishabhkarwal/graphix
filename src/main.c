@@ -37,6 +37,7 @@ point cross(point a, point b);
 float dot(point a, point b);
 point midpoint(point a, point b);
 
+// ensures triangle winding is outward after centring
 void orient_triangles_outward(const point *points, triangle *triangles, int triangle_count) {
     for (int i = 0; i < triangle_count; i++) {
         triangle t = triangles[i];
@@ -65,6 +66,7 @@ void orient_triangles_outward(const point *points, triangle *triangles, int tria
     }
 }
 
+// returns a 4x4 identity matrix
 mat4 mat4_identity(void) {
     mat4 out = {{{0}}};
     out.m[0][0] = 1.0f;
@@ -74,6 +76,7 @@ mat4 mat4_identity(void) {
     return out;
 }
 
+// builds a single model-to-camera transform from euler rotation and translation
 mat4 build_transform_matrix(float pitch, float yaw, float roll, point translation) {
     // combined rotation (Rz * Ry * Rx) plus translation in one matrix
     float sx = sinf(pitch), cx = cosf(pitch);
@@ -100,6 +103,7 @@ mat4 build_transform_matrix(float pitch, float yaw, float roll, point translatio
     return out;
 }
 
+// flattens a mat4 into a contiguous float array for uniform upload
 void mat4_to_array(const mat4 *m, float out[16]) {
     for (int row = 0; row < 4; row++) {
         for (int col = 0; col < 4; col++) {
@@ -108,10 +112,12 @@ void mat4_to_array(const mat4 *m, float out[16]) {
     }
 }
 
+// hashes a canonical edge pair for bucket lookup
 static unsigned int edge_hash(int start, int end) {
     return ((unsigned int)start * 73856093u) ^ ((unsigned int)end * 19349663u);
 }
 
+// selects a conservative bucket count for edge hash tables
 static int edge_bucket_count_for_items(int item_count) {
     if (item_count < 0) return 0;
 
@@ -122,6 +128,7 @@ static int edge_bucket_count_for_items(int item_count) {
     return (int)suggested;
 }
 
+// looks up an edge index from a chained hash table
 static int find_edge_index_hashed(
     const edge *edges,
     const int *buckets,
@@ -145,6 +152,7 @@ static int find_edge_index_hashed(
     return -1;
 }
 
+// builds a unique undirected edge list from triangle indices
 int build_unique_edges_from_triangles(const triangle *triangles, int triangle_count, edge **out_edges, int *out_edge_count) {
     *out_edges = NULL;
     *out_edge_count = 0;
@@ -224,6 +232,7 @@ int build_unique_edges_from_triangles(const triangle *triangles, int triangle_co
     return 1;
 }
 
+// frees cpu and gpu resources owned by one lod mesh
 void free_lod_mesh(lod_mesh *lod) {
     if (!lod) return;
 
@@ -239,6 +248,7 @@ void free_lod_mesh(lod_mesh *lod) {
     lod->gpu_mesh_id = -1;
 }
 
+// creates lod level 0 from the loaded mesh and uploads it
 int build_base_lod(const mesh *source, lod_mesh *base) {
     base->gpu_mesh_id = -1;
     base->built = 0;
@@ -274,6 +284,7 @@ int build_base_lod(const mesh *source, lod_mesh *base) {
     return 1;
 }
 
+// builds the next subdivision level from an existing lod mesh
 int build_next_lod(const lod_mesh *previous, lod_mesh *next) {
     next->gpu_mesh_id = -1;
     next->built = 0;
@@ -389,10 +400,12 @@ int build_next_lod(const lod_mesh *previous, lod_mesh *next) {
     return 1;
 }
 
+// subtracts one point/vector from another
 point subtract(point a, point b) {
     return (point){a.x - b.x, a.y - b.y, a.z - b.z, 0.0f};
 }
 
+// returns the 3d cross product of two vectors
 point cross(point a, point b) {
     return (point){
         a.y * b.z - a.z * b.y,
@@ -402,10 +415,12 @@ point cross(point a, point b) {
     };
 }
 
+// returns the 3d dot product of two vectors
 float dot(point a, point b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
+// returns the midpoint between two positions
 point midpoint(point a, point b) {
     return (point){
         (a.x + b.x) * 0.5f,
@@ -415,6 +430,7 @@ point midpoint(point a, point b) {
     };
 }
 
+// prints lod mesh counts for quick inspection
 void print_lod_mesh_stats(int level, const lod_mesh *lod) {
     printf(
         "Subdivision level: %d | vertices: %d | faces: %d | triangles: %d\n",
@@ -425,6 +441,7 @@ void print_lod_mesh_stats(int level, const lod_mesh *lod) {
     );
 }
 
+// runs input, lod selection, and rendering for the active model
 int main(int argc, char *argv[]) {
     // fallback to a default model if none presented
     const char *model_name = (argc > 1) ? argv[1] : "cube";
@@ -445,7 +462,7 @@ int main(int argc, char *argv[]) {
     float angle_y = 0.5f; // yaw
     float angle_z = 0;    // roll
 
-    // setup the display window
+    // set up the display window
     if (!init_renderer(WIDTH, HEIGHT, "Graphix")) return 1;
 
     lod_mesh lods[MAX_SUBDIVIDE_LEVEL + 1];

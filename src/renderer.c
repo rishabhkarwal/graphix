@@ -15,8 +15,8 @@ typedef struct {
 } gpu_mesh;
 
 static GLFWwindow *screen = NULL;
-static int WIDTH = 0;
-static int HEIGHT = 0;
+static int screen_width = 0;
+static int screen_height = 0;
 static double last_time = 0;
 static int frames = 0;
 static double current_fps = 60.0;
@@ -47,44 +47,45 @@ static int mesh_capacity = 0;
 
 static const char *vertex_shader_source =
     "#version 120\n"
-    "attribute vec3 aPosition;\n"
-    "attribute vec3 aNormal;\n"
-    "uniform mat4 uModelToCamera;\n"
-    "uniform vec2 uViewportHalf;\n"
-    "uniform vec2 uDepthRange;\n"
-    "uniform float uProjectionScale;\n"
-    "uniform vec2 uLightingMix;\n"
-    "uniform vec2 uPan;\n"
-    "uniform int uUseLighting;\n"
-    "uniform vec3 uBaseColor;\n"
-    "uniform vec3 uWireColor;\n"
-    "varying vec3 vColour;\n"
+    "attribute vec3 a_position;\n"
+    "attribute vec3 a_normal;\n"
+    "uniform mat4 u_model_to_camera;\n"
+    "uniform vec2 u_viewport_half;\n"
+    "uniform vec2 u_depth_range;\n"
+    "uniform float u_projection_scale;\n"
+    "uniform vec2 u_lighting_mix;\n"
+    "uniform vec2 u_pan;\n"
+    "uniform int u_use_lighting;\n"
+    "uniform vec3 u_base_colour;\n"
+    "uniform vec3 u_wire_colour;\n"
+    "varying vec3 v_colour;\n"
     "void main() {\n"
-    "  vec4 cameraPos = uModelToCamera * vec4(aPosition, 1.0);\n"
-    "  float z = max(cameraPos.z, uDepthRange.x);\n"
-    "  float screenX = cameraPos.x * uProjectionScale / z + uPan.x;\n"
-    "  float screenY = cameraPos.y * uProjectionScale / z + uPan.y;\n"
-    "  float depth = clamp((cameraPos.z - uDepthRange.x) / (uDepthRange.y - uDepthRange.x), 0.0, 1.0);\n"
-    "  float clipZ = depth * 2.0 - 1.0;\n"
-    "  gl_Position = vec4(screenX / uViewportHalf.x, screenY / uViewportHalf.y, clipZ, 1.0);\n"
-    "  if (uUseLighting == 1) {\n"
-    "    vec3 normalCamera = normalize(mat3(uModelToCamera) * aNormal);\n"
-    "    vec3 toLight = normalize(-cameraPos.xyz);\n"
-    "    float diffuse = max(dot(normalCamera, toLight), 0.0);\n"
-    "    float intensity = min(1.0, uLightingMix.x + uLightingMix.y * diffuse);\n"
-    "    vColour = uBaseColor * intensity;\n"
+    "  vec4 camera_pos = u_model_to_camera * vec4(a_position, 1.0);\n"
+    "  float z = max(camera_pos.z, u_depth_range.x);\n"
+    "  float screen_x = camera_pos.x * u_projection_scale / z + u_pan.x;\n"
+    "  float screen_y = camera_pos.y * u_projection_scale / z + u_pan.y;\n"
+    "  float depth = clamp((camera_pos.z - u_depth_range.x) / (u_depth_range.y - u_depth_range.x), 0.0, 1.0);\n"
+    "  float clip_z = depth * 2.0 - 1.0;\n"
+    "  gl_Position = vec4(screen_x / u_viewport_half.x, screen_y / u_viewport_half.y, clip_z, 1.0);\n"
+    "  if (u_use_lighting == 1) {\n"
+    "    vec3 normal_camera = normalize(mat3(u_model_to_camera) * a_normal);\n"
+    "    vec3 to_light = normalize(-camera_pos.xyz);\n"
+    "    float diffuse = max(dot(normal_camera, to_light), 0.0);\n"
+    "    float intensity = min(1.0, u_lighting_mix.x + u_lighting_mix.y * diffuse);\n"
+    "    v_colour = u_base_colour * intensity;\n"
     "  } else {\n"
-    "    vColour = uWireColor;\n"
+    "    v_colour = u_wire_colour;\n"
     "  }\n"
     "}\n";
 
 static const char *fragment_shader_source =
     "#version 120\n"
-    "varying vec3 vColour;\n"
+    "varying vec3 v_colour;\n"
     "void main() {\n"
-    "  gl_FragColor = vec4(vColour, 1.0);\n"
+    "  gl_FragColor = vec4(v_colour, 1.0);\n"
     "}\n";
 
+// compiles a single shader stage and reports compile errors
 static GLuint compile_shader(GLenum type, const char *source) {
     GLuint shader = glCreateShader(type);
     if (!shader) return 0;
@@ -106,6 +107,7 @@ static GLuint compile_shader(GLenum type, const char *source) {
     return shader;
 }
 
+// links vertex and fragment stages into one shader program
 static GLuint create_shader_program(void) {
     GLuint vertex_shader = compile_shader(GL_VERTEX_SHADER, vertex_shader_source);
     if (!vertex_shader) return 0;
@@ -125,8 +127,8 @@ static GLuint create_shader_program(void) {
 
     glAttachShader(program, vertex_shader);
     glAttachShader(program, fragment_shader);
-    glBindAttribLocation(program, 0, "aPosition");
-    glBindAttribLocation(program, 1, "aNormal");
+    glBindAttribLocation(program, 0, "a_position");
+    glBindAttribLocation(program, 1, "a_normal");
     glLinkProgram(program);
 
     GLint linked = 0;
@@ -145,6 +147,7 @@ static GLuint create_shader_program(void) {
     return program;
 }
 
+// grows the mesh slot array to fit the requested count
 static int ensure_mesh_capacity(int required_count) {
     if (required_count <= mesh_capacity) return 1;
 
@@ -165,6 +168,7 @@ static int ensure_mesh_capacity(int required_count) {
     return 1;
 }
 
+// computes a face normal for one triangle
 static void write_triangle_normal(
     float ax, float ay, float az,
     float bx, float by, float bz,
@@ -197,6 +201,7 @@ static void write_triangle_normal(
     *nz = z / length;
 }
 
+// releases opengl buffers associated with one gpu mesh
 static void free_mesh_gpu_resources(gpu_mesh *mesh) {
     if (!mesh || !mesh->in_use) return;
 
@@ -208,6 +213,7 @@ static void free_mesh_gpu_resources(gpu_mesh *mesh) {
     *mesh = (gpu_mesh){0};
 }
 
+// finds or allocates a free gpu mesh slot
 static int allocate_mesh_slot(void) {
     for (int i = 0; i < mesh_count; i++) {
         if (!meshes[i].in_use) return i;
@@ -217,6 +223,7 @@ static int allocate_mesh_slot(void) {
     return mesh_count++;
 }
 
+// accumulates scroll input for frame-based consumption
 static void scroll_callback(GLFWwindow *window, double xoffset, double yoffset) {
     (void)window;
     (void)xoffset;
@@ -224,8 +231,10 @@ static void scroll_callback(GLFWwindow *window, double xoffset, double yoffset) 
     scroll_offset += (float)yoffset;
 }
 
+// initialises glfw, opengl state, and shader handles
 int init_renderer(int width, int height, const char *title) {
-    WIDTH = width; HEIGHT = height;
+    screen_width = width;
+    screen_height = height;
     if (!glfwInit()) return 0;
     
     // minimal opengl config to lock aspect ratio
@@ -247,17 +256,17 @@ int init_renderer(int width, int height, const char *title) {
     shader_program = create_shader_program();
     if (!shader_program) return 0;
 
-    position_attr = glGetAttribLocation(shader_program, "aPosition");
-    normal_attr = glGetAttribLocation(shader_program, "aNormal");
-    viewport_half_uniform = glGetUniformLocation(shader_program, "uViewportHalf");
-    depth_range_uniform = glGetUniformLocation(shader_program, "uDepthRange");
-    model_to_camera_uniform = glGetUniformLocation(shader_program, "uModelToCamera");
-    pan_uniform = glGetUniformLocation(shader_program, "uPan");
-    use_lighting_uniform = glGetUniformLocation(shader_program, "uUseLighting");
-    base_colour_uniform = glGetUniformLocation(shader_program, "uBaseColor");
-    wire_colour_uniform = glGetUniformLocation(shader_program, "uWireColor");
-    projection_scale_uniform = glGetUniformLocation(shader_program, "uProjectionScale");
-    lighting_mix_uniform = glGetUniformLocation(shader_program, "uLightingMix");
+    position_attr = glGetAttribLocation(shader_program, "a_position");
+    normal_attr = glGetAttribLocation(shader_program, "a_normal");
+    viewport_half_uniform = glGetUniformLocation(shader_program, "u_viewport_half");
+    depth_range_uniform = glGetUniformLocation(shader_program, "u_depth_range");
+    model_to_camera_uniform = glGetUniformLocation(shader_program, "u_model_to_camera");
+    pan_uniform = glGetUniformLocation(shader_program, "u_pan");
+    use_lighting_uniform = glGetUniformLocation(shader_program, "u_use_lighting");
+    base_colour_uniform = glGetUniformLocation(shader_program, "u_base_colour");
+    wire_colour_uniform = glGetUniformLocation(shader_program, "u_wire_colour");
+    projection_scale_uniform = glGetUniformLocation(shader_program, "u_projection_scale");
+    lighting_mix_uniform = glGetUniformLocation(shader_program, "u_lighting_mix");
     
     // set scroll callback for camera zoom
     glfwSetScrollCallback(screen, scroll_callback);
@@ -266,6 +275,7 @@ int init_renderer(int width, int height, const char *title) {
     return 1;
 }
 
+// tears down gpu state and closes the window
 void quit_renderer(void) {
     // cleans up glfw resources
     for (int i = 0; i < mesh_count; i++) {
@@ -283,6 +293,7 @@ void quit_renderer(void) {
     glfwTerminate();
 }
 
+// polls events and reports whether the app should exit
 int events_quit(void) {
     // handles system events and checks for escape key
     glfwPollEvents();
@@ -292,21 +303,24 @@ int events_quit(void) {
     return 0;
 }
 
+// returns whether a key is currently pressed
 int key_down(int key) {
     if (!screen) return 0;
     return glfwGetKey(screen, key) == GLFW_PRESS;
 }
 
+// returns and resets accumulated scroll delta
 float get_scroll_offset(void) {
     float result = scroll_offset;
     scroll_offset = 0.0f;
     return result;
 }
 
+// captures the back buffer and writes it as a binary ppm image
 int renderer_capture_framebuffer_ppm(const char *path) {
     if (!path || !screen) return 0;
 
-    int byte_count = WIDTH * HEIGHT * 3;
+    int byte_count = screen_width * screen_height * 3;
     if (byte_count <= 0) return 0;
 
     unsigned char *pixels = malloc((size_t)byte_count);
@@ -314,7 +328,7 @@ int renderer_capture_framebuffer_ppm(const char *path) {
 
     glReadBuffer(GL_BACK);
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, WIDTH, HEIGHT, GL_RGB, GL_UNSIGNED_BYTE, pixels);
+    glReadPixels(0, 0, screen_width, screen_height, GL_RGB, GL_UNSIGNED_BYTE, pixels);
 
     FILE *out = fopen(path, "wb");
     if (!out) {
@@ -322,11 +336,11 @@ int renderer_capture_framebuffer_ppm(const char *path) {
         return 0;
     }
 
-    fprintf(out, "P6\n%d %d\n255\n", WIDTH, HEIGHT);
+    fprintf(out, "P6\n%d %d\n255\n", screen_width, screen_height);
 
     // glReadPixels returns bottom-up rows; write top-down for normal image orientation.
-    for (int y = HEIGHT - 1; y >= 0; y--) {
-        fwrite(pixels + (size_t)y * (size_t)WIDTH * 3, 1, (size_t)WIDTH * 3, out);
+    for (int y = screen_height - 1; y >= 0; y--) {
+        fwrite(pixels + (size_t)y * (size_t)screen_width * 3, 1, (size_t)screen_width * 3, out);
     }
 
     fclose(out);
@@ -334,6 +348,7 @@ int renderer_capture_framebuffer_ppm(const char *path) {
     return 1;
 }
 
+// uploads mesh buffers for shaded and wireframe render paths
 int renderer_upload_mesh(
     const point *positions,
     int point_count,
@@ -436,11 +451,13 @@ int renderer_upload_mesh(
     return mesh_id;
 }
 
+// frees one uploaded gpu mesh by id
 void renderer_free_gpu_mesh(int mesh_id) {
     if (mesh_id < 0 || mesh_id >= mesh_count) return;
     free_mesh_gpu_resources(&meshes[mesh_id]);
 }
 
+// draws one mesh in shaded or wireframe mode
 void renderer_draw_mesh(
     int mesh_id,
     const float *model_to_camera,
@@ -461,7 +478,7 @@ void renderer_draw_mesh(
 
     glUseProgram(shader_program);
     glUniformMatrix4fv(model_to_camera_uniform, 1, GL_TRUE, model_to_camera);
-    glUniform2f(viewport_half_uniform, WIDTH * 0.5f, HEIGHT * 0.5f);
+    glUniform2f(viewport_half_uniform, screen_width * 0.5f, screen_height * 0.5f);
     glUniform2f(depth_range_uniform, RENDER_NEAR_DEPTH, RENDER_FAR_DEPTH);
     glUniform1f(projection_scale_uniform, RENDER_PROJECTION_SCALE);
     glUniform2f(lighting_mix_uniform, RENDER_AMBIENT_LIGHT, RENDER_DIFFUSE_LIGHT_SCALE);
@@ -504,12 +521,14 @@ void renderer_draw_mesh(
     glUseProgram(0);
 }
 
+// clears colour and depth buffers for a new frame
 void fill_background(int r, int g, int b) {
     // clears screen using the given RGB colour
     glClearColor(r / 255.0f, g / 255.0f, b / 255.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
+// presents the frame and updates fps in the title bar
 void update_display(void) {
     // updates fps in the window title
     double now = glfwGetTime();

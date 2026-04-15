@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+// loads an obj mesh and builds adjacency data for fast lookups
 mesh load_obj(const char *filename) {
     mesh m = {0};
     FILE *f = fopen(filename, "r");
@@ -148,6 +149,7 @@ mesh load_obj(const char *filename) {
     return m;
 }
 
+// recentres mesh points around the origin
 void centre(mesh *m) {
     if (m->point_count == 0) return;
     
@@ -179,6 +181,7 @@ void centre(mesh *m) {
     }
 }
 
+// releases all allocated mesh memory
 void free_mesh(mesh *m) {
     // clear dynamic memory to prevent memory leaks
     if (m->points) free(m->points);
