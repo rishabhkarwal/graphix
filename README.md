@@ -25,7 +25,7 @@ make
 | Key | Action |
 | --- | --- |
 | **ESC** | Close window |
-| **SPACE** | Toggle wireframe debug view |
+| **SPACE** | Toggle wireframe |
 | **+** | Increase subdivision level |
 | **-** | Decrease subdivision level |
 

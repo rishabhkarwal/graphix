@@ -273,6 +273,33 @@ void draw_subdivided_wireframe_triangle(point a, point b, point c, int level) {
     draw_subdivided_wireframe_triangle(ab, bc, ca, level - 1);
 }
 
+void print_subdivision_stats(const mesh *m, int level) {
+    unsigned long long vertices = (unsigned long long)m->point_count;
+    unsigned long long edges = (unsigned long long)m->edge_count;
+    unsigned long long triangles = (unsigned long long)m->triangle_count;
+
+    for (int i = 0; i < level; i++) {
+        unsigned long long next_vertices = vertices + edges;
+        unsigned long long next_edges = 2ULL * edges + 3ULL * triangles;
+        unsigned long long next_triangles = 4ULL * triangles;
+
+        vertices = next_vertices;
+        edges = next_edges;
+        triangles = next_triangles;
+    }
+
+    // subdivision yields triangular faces, so face and triangle counts are equivalent
+    unsigned long long faces = triangles;
+
+    printf(
+        "Subdivision level: %d | vertices: %llu | faces: %llu | triangles: %llu\n",
+        level,
+        vertices,
+        faces,
+        triangles
+    );
+}
+
 int main(int argc, char *argv[]) {
     // fallback to a default model if none presented
     const char *model_name = (argc > 1) ? argv[1] : "cube";
@@ -307,8 +334,8 @@ int main(int argc, char *argv[]) {
     // track frame time for frame-rate independent rotation
     double last_time = glfwGetTime();
 
-    // toggles debug draw mode for triangulation
-    int triangle_view = 0;
+    // toggles pure wireframe mode (off by default)
+    int wireframe_view = 0;
     int was_space_down = 0;
     int subdivision_level = 0;
     int was_plus_down = 0;
@@ -325,10 +352,10 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-        // toggle triangle debug view on space key press edge
+        // toggle pure wireframe view on space key press edge
         int is_space_down = key_down(GLFW_KEY_SPACE);
         if (is_space_down && !was_space_down) {
-            triangle_view = !triangle_view;
+            wireframe_view = !wireframe_view;
         }
         was_space_down = is_space_down;
 
@@ -338,11 +365,11 @@ int main(int argc, char *argv[]) {
 
         if (is_plus_down && !was_plus_down && subdivision_level < MAX_SUBDIVIDE_LEVEL) {
             subdivision_level++;
-            printf("Subdivision level: %d\n", subdivision_level);
+            print_subdivision_stats(&m, subdivision_level);
         }
         if (is_minus_down && !was_minus_down && subdivision_level > 0) {
             subdivision_level--;
-            printf("Subdivision level: %d\n", subdivision_level);
+            print_subdivision_stats(&m, subdivision_level);
         }
 
         was_plus_down = is_plus_down;
@@ -402,8 +429,8 @@ int main(int argc, char *argv[]) {
             triangle_front[i] = facing > 0.0f;
         }
 
-        // draw either mesh edges or triangulation edges
-        if (!triangle_view) {
+        // draw either shaded faces or pure wireframe
+        if (!wireframe_view) {
             // draw front-facing triangles from back to front
             int front_count = 0;
             for (int i = 0; i < m.triangle_count; i++) {
@@ -508,37 +535,6 @@ int main(int argc, char *argv[]) {
                 }
             }
 
-            // overlay visible wireframe edges
-            if (subdivision_level <= 0) {
-                for (int i = 0; i < m.edge_count; i++) {
-                    edge e = m.edges[i];
-
-                    // hidden-line removal for convex wireframe
-                    int visible = 0;
-                    for (int j = 0; j < m.triangle_count; j++) {
-                        if (!triangle_front[j]) continue;
-                        if (triangle_contains_edge(m.triangles[j], e.start, e.end)) {
-                            visible = 1;
-                            break;
-                        }
-                    }
-                    if (!visible) continue;
-
-                    point start = projected[e.start];
-                    point end = projected[e.end];
-                    draw_aaline(start, end, accent[0], accent[1], accent[2]);
-                }
-            } else {
-                // when subdivision is enabled, draw subdivided wireframe on visible triangles
-                for (int i = 0; i < front_count; i++) {
-                    int t_index = triangle_order[i];
-                    triangle t = m.triangles[t_index];
-                    point camera_a = camera_space[t.a];
-                    point camera_b = camera_space[t.b];
-                    point camera_c = camera_space[t.c];
-                    draw_subdivided_wireframe_triangle(camera_a, camera_b, camera_c, subdivision_level);
-                }
-            }
         } else {
             for (int i = 0; i < m.triangle_count; i++) {
                 if (!triangle_front[i]) continue;
