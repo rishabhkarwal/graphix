@@ -12,6 +12,8 @@
 #define EPSILON 0.000001f
 #define NORMAL_SIMILARITY_THRESHOLD 0.70710678f // cos(45) - only smooth across edges where angle is at most about 45
 #define MAX_SUBDIVIDE_LEVEL 7
+#define SUBDIVISION_EDGE_THRESHOLD 12.0f // stop subdividing once the triangle is this small on screen
+#define SUBDIVISION_EDGE_THRESHOLD_SQUARED (SUBDIVISION_EDGE_THRESHOLD * SUBDIVISION_EDGE_THRESHOLD)
 
 int background[3] = {0, 0, 0};
 int accent[3]     = {255, 255, 255};
@@ -133,6 +135,43 @@ int midpoint_channel(int a, int b) {
     return (a + b) / 2;
 }
 
+float point_distance_squared(point a, point b) {
+    float dx = a.x - b.x;
+    float dy = a.y - b.y;
+    float dz = a.z - b.z;
+    return dx * dx + dy * dy + dz * dz;
+}
+
+int triangle_front_facing(point a, point b, point c) {
+    point ab = subtract(b, a);
+    point ac = subtract(c, a);
+    point normal = cross(ab, ac);
+
+    point centroid = (point){
+        (a.x + b.x + c.x) / 3.0f,
+        (a.y + b.y + c.y) / 3.0f,
+        (a.z + b.z + c.z) / 3.0f
+    };
+
+    point to_camera = (point){-centroid.x, -centroid.y, -centroid.z};
+    return dot(normal, to_camera) > 0.0f;
+}
+
+float triangle_max_projected_edge_length_squared(point a, point b, point c) {
+    point projected_a = convert(a);
+    point projected_b = convert(b);
+    point projected_c = convert(c);
+
+    float ab = point_distance_squared(projected_a, projected_b);
+    float bc = point_distance_squared(projected_b, projected_c);
+    float ca = point_distance_squared(projected_c, projected_a);
+
+    float max_length = ab;
+    if (bc > max_length) max_length = bc;
+    if (ca > max_length) max_length = ca;
+    return max_length;
+}
+
 void draw_subdivided_triangle(
     point a,
     point b,
@@ -188,18 +227,20 @@ void draw_subdivided_triangle(
     while (task_count > 0) {
         subdivided_triangle_task task = tasks[--task_count];
 
-        if (task.level <= 0) {
-            // project only at draw time to preserve perspective-correct splits
-            point projected_a = convert(task.a);
-            point projected_b = convert(task.b);
-            point projected_c = convert(task.c);
+        point projected_a = convert(task.a);
+        point projected_b = convert(task.b);
+        point projected_c = convert(task.c);
 
-            projected_a.x += camera_x;
-            projected_a.y += camera_y;
-            projected_b.x += camera_x;
-            projected_b.y += camera_y;
-            projected_c.x += camera_x;
-            projected_c.y += camera_y;
+        projected_a.x += camera_x;
+        projected_a.y += camera_y;
+        projected_b.x += camera_x;
+        projected_b.y += camera_y;
+        projected_c.x += camera_x;
+        projected_c.y += camera_y;
+
+        float max_edge_length_squared = triangle_max_projected_edge_length_squared(task.a, task.b, task.c);
+
+        if (task.level <= 0 || max_edge_length_squared <= SUBDIVISION_EDGE_THRESHOLD_SQUARED) {
 
             draw_triangle(
                 projected_a,
@@ -313,18 +354,20 @@ void draw_subdivided_wireframe_triangle(point a, point b, point c, int level, fl
     while (task_count > 0) {
         subdivided_wireframe_task task = tasks[--task_count];
 
-        if (task.level <= 0) {
-            // project only at draw time to preserve perspective-correct splits
-            point projected_a = convert(task.a);
-            point projected_b = convert(task.b);
-            point projected_c = convert(task.c);
+        point projected_a = convert(task.a);
+        point projected_b = convert(task.b);
+        point projected_c = convert(task.c);
 
-            projected_a.x += camera_x;
-            projected_a.y += camera_y;
-            projected_b.x += camera_x;
-            projected_b.y += camera_y;
-            projected_c.x += camera_x;
-            projected_c.y += camera_y;
+        projected_a.x += camera_x;
+        projected_a.y += camera_y;
+        projected_b.x += camera_x;
+        projected_b.y += camera_y;
+        projected_c.x += camera_x;
+        projected_c.y += camera_y;
+
+        float max_edge_length_squared = triangle_max_projected_edge_length_squared(task.a, task.b, task.c);
+
+        if (task.level <= 0 || max_edge_length_squared <= SUBDIVISION_EDGE_THRESHOLD_SQUARED) {
 
             draw_aaline(projected_a, projected_b, accent[0], accent[1], accent[2]);
             draw_aaline(projected_b, projected_c, accent[0], accent[1], accent[2]);
