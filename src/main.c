@@ -9,11 +9,8 @@
 #define HEIGHT 600
 #define PI 3.14159265359f
 #define TAU (2.0f * PI)
-#define EPSILON 0.000001f
-#define NORMAL_SIMILARITY_THRESHOLD 0.70710678f // cos(45) - only smooth across edges where angle is at most about 45
 #define MAX_SUBDIVIDE_LEVEL 7
-#define SUBDIVISION_EDGE_THRESHOLD 5.0f // stop subdividing once the triangle is this small on screen
-#define SUBDIVISION_EDGE_THRESHOLD_SQUARED (SUBDIVISION_EDGE_THRESHOLD * SUBDIVISION_EDGE_THRESHOLD)
+#define MAX_CACHED_TRIANGLES 3000000
 
 int background[3] = {0, 0, 0};
 int accent[3]     = {255, 255, 255};
@@ -23,16 +20,53 @@ typedef struct {
     float m[4][4];
 } mat4;
 
-point project(point position, float scale) {
-    // projects 3D co-ordinate to 2D plane
-    float x = position.x, y = position.y, z = position.z;
-    if (z == 0) z = 0.1f;
-    return (point){x * scale / z, y * scale / z, z, 1.0f};
-}
+typedef struct {
+    point *points;
+    int point_count;
+    triangle *triangles;
+    int triangle_count;
+    edge *edges;
+    int edge_count;
+    int gpu_mesh_id;
+    int built;
+} lod_mesh;
 
-point convert(point position) {
-    // scale to screen size
-    return project(position, 800.0f);
+typedef struct {
+    int a;
+    int b;
+} sorted_edge;
+
+point subtract(point a, point b);
+point cross(point a, point b);
+float dot(point a, point b);
+point midpoint(point a, point b);
+
+void orient_triangles_outward(const point *points, triangle *triangles, int triangle_count) {
+    for (int i = 0; i < triangle_count; i++) {
+        triangle t = triangles[i];
+
+        point a = points[t.a];
+        point b = points[t.b];
+        point c = points[t.c];
+
+        point ab = subtract(b, a);
+        point ac = subtract(c, a);
+        point normal = cross(ab, ac);
+
+        // meshes are centred before LOD build, so outward normals align with triangle centroid direction.
+        point centroid = (point){
+            (a.x + b.x + c.x) / 3.0f,
+            (a.y + b.y + c.y) / 3.0f,
+            (a.z + b.z + c.z) / 3.0f,
+            1.0f
+        };
+
+        if (dot(normal, centroid) < 0.0f) {
+            int tmp = triangles[i].b;
+            triangles[i].b = triangles[i].c;
+            triangles[i].c = tmp;
+        }
+    }
 }
 
 mat4 mat4_identity(void) {
@@ -42,31 +76,6 @@ mat4 mat4_identity(void) {
     out.m[2][2] = 1.0f;
     out.m[3][3] = 1.0f;
     return out;
-}
-
-mat4 mat4_multiply(mat4 a, mat4 b) {
-    mat4 out = {{{0}}};
-
-    for (int row = 0; row < 4; row++) {
-        for (int col = 0; col < 4; col++) {
-            float value = 0.0f;
-            for (int k = 0; k < 4; k++) {
-                value += a.m[row][k] * b.m[k][col];
-            }
-            out.m[row][col] = value;
-        }
-    }
-
-    return out;
-}
-
-point mat4_mul_point(mat4 m, point v) {
-    return (point){
-        m.m[0][0] * v.x + m.m[0][1] * v.y + m.m[0][2] * v.z + m.m[0][3] * v.w,
-        m.m[1][0] * v.x + m.m[1][1] * v.y + m.m[1][2] * v.z + m.m[1][3] * v.w,
-        m.m[2][0] * v.x + m.m[2][1] * v.y + m.m[2][2] * v.z + m.m[2][3] * v.w,
-        m.m[3][0] * v.x + m.m[3][1] * v.y + m.m[3][2] * v.z + m.m[3][3] * v.w
-    };
 }
 
 mat4 build_transform_matrix(float pitch, float yaw, float roll, point translation) {
@@ -95,18 +104,229 @@ mat4 build_transform_matrix(float pitch, float yaw, float roll, point translatio
     return out;
 }
 
-point transform_point(mat4 transform, point p) {
-    point in = p;
-    if (fabsf(in.w) <= EPSILON) in.w = 1.0f;
+void mat4_to_array(const mat4 *m, float out[16]) {
+    for (int row = 0; row < 4; row++) {
+        for (int col = 0; col < 4; col++) {
+            out[row * 4 + col] = m->m[row][col];
+        }
+    }
+}
 
-    point out = mat4_mul_point(transform, in);
+int compare_sorted_edges(const void *lhs, const void *rhs) {
+    const sorted_edge *a = (const sorted_edge *)lhs;
+    const sorted_edge *b = (const sorted_edge *)rhs;
 
-    if (fabsf(out.w) <= EPSILON) {
-        return (point){out.x, out.y, out.z, 1.0f};
+    if (a->a != b->a) return a->a - b->a;
+    return a->b - b->b;
+}
+
+int build_unique_edges_from_triangles(const triangle *triangles, int triangle_count, edge **out_edges, int *out_edge_count) {
+    *out_edges = NULL;
+    *out_edge_count = 0;
+    if (triangle_count <= 0) return 1;
+
+    int pair_count = triangle_count * 3;
+    sorted_edge *pairs = malloc((size_t)pair_count * sizeof(sorted_edge));
+    if (!pairs) return 0;
+
+    int p = 0;
+    for (int i = 0; i < triangle_count; i++) {
+        triangle t = triangles[i];
+
+        int a0 = t.a < t.b ? t.a : t.b;
+        int b0 = t.a < t.b ? t.b : t.a;
+        pairs[p++] = (sorted_edge){a0, b0};
+
+        int a1 = t.b < t.c ? t.b : t.c;
+        int b1 = t.b < t.c ? t.c : t.b;
+        pairs[p++] = (sorted_edge){a1, b1};
+
+        int a2 = t.c < t.a ? t.c : t.a;
+        int b2 = t.c < t.a ? t.a : t.c;
+        pairs[p++] = (sorted_edge){a2, b2};
     }
 
-    float inv_w = 1.0f / out.w;
-    return (point){out.x * inv_w, out.y * inv_w, out.z * inv_w, 1.0f};
+    qsort(pairs, (size_t)pair_count, sizeof(sorted_edge), compare_sorted_edges);
+
+    int unique_count = 0;
+    for (int i = 0; i < pair_count; i++) {
+        if (i == 0 || pairs[i].a != pairs[i - 1].a || pairs[i].b != pairs[i - 1].b) {
+            unique_count++;
+        }
+    }
+
+    edge *unique_edges = malloc((size_t)unique_count * sizeof(edge));
+    if (!unique_edges) {
+        free(pairs);
+        return 0;
+    }
+
+    int out_index = 0;
+    for (int i = 0; i < pair_count; i++) {
+        if (i > 0 && pairs[i].a == pairs[i - 1].a && pairs[i].b == pairs[i - 1].b) continue;
+        unique_edges[out_index++] = (edge){pairs[i].a, pairs[i].b};
+    }
+
+    free(pairs);
+    *out_edges = unique_edges;
+    *out_edge_count = unique_count;
+    return 1;
+}
+
+int find_edge_index(const edge *edges, int edge_count, int start, int end) {
+    int low = 0;
+    int high = edge_count - 1;
+
+    while (low <= high) {
+        int mid = (low + high) / 2;
+        edge e = edges[mid];
+
+        if (e.start == start && e.end == end) {
+            return mid;
+        }
+
+        if (e.start < start || (e.start == start && e.end < end)) {
+            low = mid + 1;
+        } else {
+            high = mid - 1;
+        }
+    }
+
+    return -1;
+}
+
+void free_lod_mesh(lod_mesh *lod) {
+    if (!lod) return;
+
+    if (lod->gpu_mesh_id >= 0) {
+        renderer_free_gpu_mesh(lod->gpu_mesh_id);
+    }
+
+    if (lod->points) free(lod->points);
+    if (lod->triangles) free(lod->triangles);
+    if (lod->edges) free(lod->edges);
+
+    *lod = (lod_mesh){0};
+    lod->gpu_mesh_id = -1;
+}
+
+int build_base_lod(const mesh *source, lod_mesh *base) {
+    base->gpu_mesh_id = -1;
+    base->built = 0;
+    base->point_count = source->point_count;
+    base->triangle_count = source->triangle_count;
+
+    base->points = malloc((size_t)base->point_count * sizeof(point));
+    base->triangles = malloc((size_t)base->triangle_count * sizeof(triangle));
+    if (!base->points || !base->triangles) return 0;
+
+    for (int i = 0; i < base->point_count; i++) {
+        base->points[i] = source->points[i];
+    }
+    for (int i = 0; i < base->triangle_count; i++) {
+        base->triangles[i] = source->triangles[i];
+    }
+
+    orient_triangles_outward(base->points, base->triangles, base->triangle_count);
+
+    if (!build_unique_edges_from_triangles(base->triangles, base->triangle_count, &base->edges, &base->edge_count)) return 0;
+
+    base->gpu_mesh_id = renderer_upload_mesh(
+        base->points,
+        base->point_count,
+        base->triangles,
+        base->triangle_count,
+        base->edges,
+        base->edge_count
+    );
+
+    if (base->gpu_mesh_id < 0) return 0;
+    base->built = 1;
+    return 1;
+}
+
+int build_next_lod(const lod_mesh *previous, lod_mesh *next) {
+    next->gpu_mesh_id = -1;
+    next->built = 0;
+
+    if (previous->triangle_count > MAX_CACHED_TRIANGLES / 4) {
+        return 0;
+    }
+
+    if (!previous->edges || previous->edge_count <= 0) {
+        return 0;
+    }
+
+    const edge *source_edges = previous->edges;
+    int source_edge_count = previous->edge_count;
+
+    next->point_count = previous->point_count + source_edge_count;
+    next->triangle_count = previous->triangle_count * 4;
+
+    next->points = malloc((size_t)next->point_count * sizeof(point));
+    next->triangles = malloc((size_t)next->triangle_count * sizeof(triangle));
+    if (!next->points || !next->triangles) {
+        return 0;
+    }
+
+    for (int i = 0; i < previous->point_count; i++) {
+        next->points[i] = previous->points[i];
+    }
+
+    for (int i = 0; i < source_edge_count; i++) {
+        int a = source_edges[i].start;
+        int b = source_edges[i].end;
+        next->points[previous->point_count + i] = midpoint(previous->points[a], previous->points[b]);
+    }
+
+    int out_triangle_index = 0;
+    for (int i = 0; i < previous->triangle_count; i++) {
+        triangle t = previous->triangles[i];
+
+        int ab_start = t.a < t.b ? t.a : t.b;
+        int ab_end = t.a < t.b ? t.b : t.a;
+        int bc_start = t.b < t.c ? t.b : t.c;
+        int bc_end = t.b < t.c ? t.c : t.b;
+        int ca_start = t.c < t.a ? t.c : t.a;
+        int ca_end = t.c < t.a ? t.a : t.c;
+
+        int ab = find_edge_index(source_edges, source_edge_count, ab_start, ab_end);
+        int bc = find_edge_index(source_edges, source_edge_count, bc_start, bc_end);
+        int ca = find_edge_index(source_edges, source_edge_count, ca_start, ca_end);
+
+        if (ab < 0 || bc < 0 || ca < 0) {
+            return 0;
+        }
+
+        int ab_index = previous->point_count + ab;
+        int bc_index = previous->point_count + bc;
+        int ca_index = previous->point_count + ca;
+
+        next->triangles[out_triangle_index++] = (triangle){t.a, ab_index, ca_index};
+        next->triangles[out_triangle_index++] = (triangle){ab_index, t.b, bc_index};
+        next->triangles[out_triangle_index++] = (triangle){ca_index, bc_index, t.c};
+        next->triangles[out_triangle_index++] = (triangle){ab_index, bc_index, ca_index};
+    }
+
+    if (!build_unique_edges_from_triangles(next->triangles, next->triangle_count, &next->edges, &next->edge_count)) {
+        return 0;
+    }
+
+    next->gpu_mesh_id = renderer_upload_mesh(
+        next->points,
+        next->point_count,
+        next->triangles,
+        next->triangle_count,
+        next->edges,
+        next->edge_count
+    );
+
+    if (next->gpu_mesh_id < 0) {
+        return 0;
+    }
+
+    next->built = 1;
+    return 1;
 }
 
 point subtract(point a, point b) {
@@ -126,76 +346,6 @@ float dot(point a, point b) {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
 
-point normalise(point v) {
-    float length = sqrtf(dot(v, v));
-    if (length <= EPSILON) return (point){0.0f, 0.0f, 0.0f, 0.0f};
-    return (point){v.x / length, v.y / length, v.z / length, 0.0f};
-}
-
-int triangle_contains_edge(triangle t, int start, int end) {
-    return
-        (t.a == start && t.b == end) || (t.a == end && t.b == start) ||
-        (t.b == start && t.c == end) || (t.b == end && t.c == start) ||
-        (t.c == start && t.a == end) || (t.c == end && t.a == start);
-}
-
-int triangle_contains_vertex(triangle t, int vertex_index) {
-    return t.a == vertex_index || t.b == vertex_index || t.c == vertex_index;
-}
-
-point averaged_vertex_normal(
-    int vertex_index,
-    point reference_normal,
-    const mesh *m,
-    const point *triangle_normal
-) {
-    point sum = {0.0f, 0.0f, 0.0f, 0.0f};
-
-    if (m->vertex_adjacencies) {
-        vertex_adjacency adjacency = m->vertex_adjacencies[vertex_index];
-
-        for (int i = 0; i < adjacency.triangle_count; i++) {
-            int triangle_index = adjacency.triangle_indices[i];
-
-            float normal_similarity = dot(triangle_normal[triangle_index], reference_normal);
-            if (normal_similarity < NORMAL_SIMILARITY_THRESHOLD) continue;
-
-            sum.x += triangle_normal[triangle_index].x;
-            sum.y += triangle_normal[triangle_index].y;
-            sum.z += triangle_normal[triangle_index].z;
-        }
-    } else {
-        for (int i = 0; i < m->triangle_count; i++) {
-            if (!triangle_contains_vertex(m->triangles[i], vertex_index)) continue;
-
-            float normal_similarity = dot(triangle_normal[i], reference_normal);
-            if (normal_similarity < NORMAL_SIMILARITY_THRESHOLD) continue;
-
-            sum.x += triangle_normal[i].x;
-            sum.y += triangle_normal[i].y;
-            sum.z += triangle_normal[i].z;
-        }
-    }
-
-    point averaged = normalise(sum);
-    if (dot(averaged, averaged) <= EPSILON) return reference_normal;
-    return averaged;
-}
-
-float lambert_intensity(point normal, point position) {
-    // light source is fixed at origin
-    point to_light = normalise((point){-position.x, -position.y, -position.z, 0.0f});
-
-    float diffuse = dot(normal, to_light);
-    if (diffuse < 0.0f) diffuse = 0.0f;
-
-    const float ambient = 0.15f;
-    const float diffuse_strength = 0.85f;
-    float intensity = ambient + diffuse_strength * diffuse;
-    if (intensity > 1.0f) intensity = 1.0f;
-    return intensity;
-}
-
 point midpoint(point a, point b) {
     return (point){
         (a.x + b.x) * 0.5f,
@@ -205,292 +355,13 @@ point midpoint(point a, point b) {
     };
 }
 
-int midpoint_channel(int a, int b) {
-    return (a + b) / 2;
-}
-
-float point_distance_squared(point a, point b) {
-    // screen-space subdivision tests only care about 2D projected edge length
-    float dx = a.x - b.x;
-    float dy = a.y - b.y;
-    return dx * dx + dy * dy;
-}
-
-int triangle_front_facing(point a, point b, point c) {
-    // use the triangle normal and centroid to decide whether it faces the camera
-    point ab = subtract(b, a);
-    point ac = subtract(c, a);
-    point normal = cross(ab, ac);
-
-    point centroid = (point){
-        (a.x + b.x + c.x) / 3.0f,
-        (a.y + b.y + c.y) / 3.0f,
-        (a.z + b.z + c.z) / 3.0f,
-        1.0f
-    };
-
-    point to_camera = (point){-centroid.x, -centroid.y, -centroid.z, 0.0f};
-    return dot(normal, to_camera) > 0.0f;
-}
-
-float triangle_max_projected_edge_length_squared(point a, point b, point c) {
-    // stop subdividing once the triangle is already small in screen space
-    point projected_a = convert(a);
-    point projected_b = convert(b);
-    point projected_c = convert(c);
-
-    float ab = point_distance_squared(projected_a, projected_b);
-    float bc = point_distance_squared(projected_b, projected_c);
-    float ca = point_distance_squared(projected_c, projected_a);
-
-    float max_length = ab;
-    if (bc > max_length) max_length = bc;
-    if (ca > max_length) max_length = ca;
-    return max_length;
-}
-
-void draw_subdivided_triangle(
-    point a,
-    point b,
-    point c,
-    int red_a,
-    int green_a,
-    int blue_a,
-    int red_b,
-    int green_b,
-    int blue_b,
-    int red_c,
-    int green_c,
-    int blue_c,
-    int level,
-    float camera_x,
-    float camera_y
-) {
-    typedef struct {
-        point a;
-        point b;
-        point c;
-        int red_a;
-        int green_a;
-        int blue_a;
-        int red_b;
-        int green_b;
-        int blue_b;
-        int red_c;
-        int green_c;
-        int blue_c;
-        int level;
-    } subdivided_triangle_task;
-
-    static subdivided_triangle_task tasks[1 << (MAX_SUBDIVIDE_LEVEL * 2)];
-    int task_count = 0;
-
-    // explicit task stack avoids recursive subdivision and keeps call overhead down
-    tasks[task_count++] = (subdivided_triangle_task){
-        a,
-        b,
-        c,
-        red_a,
-        green_a,
-        blue_a,
-        red_b,
-        green_b,
-        blue_b,
-        red_c,
-        green_c,
-        blue_c,
-        level
-    };
-
-    while (task_count > 0) {
-        subdivided_triangle_task task = tasks[--task_count];
-
-        // project once for the current task so both the size test and final draw reuse it
-        point projected_a = convert(task.a);
-        point projected_b = convert(task.b);
-        point projected_c = convert(task.c);
-
-        projected_a.x += camera_x;
-        projected_a.y += camera_y;
-        projected_b.x += camera_x;
-        projected_b.y += camera_y;
-        projected_c.x += camera_x;
-        projected_c.y += camera_y;
-
-        float max_edge_length_squared = triangle_max_projected_edge_length_squared(task.a, task.b, task.c);
-
-        if (task.level <= 0 || max_edge_length_squared <= SUBDIVISION_EDGE_THRESHOLD_SQUARED) {
-
-            draw_triangle(
-                projected_a,
-                projected_b,
-                projected_c,
-                task.red_a,
-                task.green_a,
-                task.blue_a,
-                task.red_b,
-                task.green_b,
-                task.blue_b,
-                task.red_c,
-                task.green_c,
-                task.blue_c
-            );
-            continue;
-        }
-
-        point ab = midpoint(task.a, task.b);
-        point bc = midpoint(task.b, task.c);
-        point ca = midpoint(task.c, task.a);
-
-        int red_ab = midpoint_channel(task.red_a, task.red_b);
-        int green_ab = midpoint_channel(task.green_a, task.green_b);
-        int blue_ab = midpoint_channel(task.blue_a, task.blue_b);
-
-        int red_bc = midpoint_channel(task.red_b, task.red_c);
-        int green_bc = midpoint_channel(task.green_b, task.green_c);
-        int blue_bc = midpoint_channel(task.blue_b, task.blue_c);
-
-        int red_ca = midpoint_channel(task.red_c, task.red_a);
-        int green_ca = midpoint_channel(task.green_c, task.green_a);
-        int blue_ca = midpoint_channel(task.blue_c, task.blue_a);
-
-        tasks[task_count++] = (subdivided_triangle_task){
-            ab,
-            bc,
-            ca,
-            red_ab,
-            green_ab,
-            blue_ab,
-            red_bc,
-            green_bc,
-            blue_bc,
-            red_ca,
-            green_ca,
-            blue_ca,
-            task.level - 1
-        };
-        tasks[task_count++] = (subdivided_triangle_task){
-            ca,
-            bc,
-            task.c,
-            red_ca,
-            green_ca,
-            blue_ca,
-            red_bc,
-            green_bc,
-            blue_bc,
-            task.red_c,
-            task.green_c,
-            task.blue_c,
-            task.level - 1
-        };
-        tasks[task_count++] = (subdivided_triangle_task){
-            ab,
-            task.b,
-            bc,
-            red_ab,
-            green_ab,
-            blue_ab,
-            task.red_b,
-            task.green_b,
-            task.blue_b,
-            red_bc,
-            green_bc,
-            blue_bc,
-            task.level - 1
-        };
-        tasks[task_count++] = (subdivided_triangle_task){
-            task.a,
-            ab,
-            ca,
-            task.red_a,
-            task.green_a,
-            task.blue_a,
-            red_ab,
-            green_ab,
-            blue_ab,
-            red_ca,
-            green_ca,
-            blue_ca,
-            task.level - 1
-        };
-    }
-}
-
-void draw_subdivided_wireframe_triangle(point a, point b, point c, int level, float camera_x, float camera_y) {
-    typedef struct {
-        point a;
-        point b;
-        point c;
-        int level;
-    } subdivided_wireframe_task;
-
-    static subdivided_wireframe_task tasks[1 << (MAX_SUBDIVIDE_LEVEL * 2)];
-    int task_count = 0;
-
-    // wireframe uses the same explicit stack structure as shaded subdivision
-    tasks[task_count++] = (subdivided_wireframe_task){a, b, c, level};
-
-    while (task_count > 0) {
-        subdivided_wireframe_task task = tasks[--task_count];
-
-        // project once for both the cutoff test and the final line draw
-        point projected_a = convert(task.a);
-        point projected_b = convert(task.b);
-        point projected_c = convert(task.c);
-
-        projected_a.x += camera_x;
-        projected_a.y += camera_y;
-        projected_b.x += camera_x;
-        projected_b.y += camera_y;
-        projected_c.x += camera_x;
-        projected_c.y += camera_y;
-
-        float max_edge_length_squared = triangle_max_projected_edge_length_squared(task.a, task.b, task.c);
-
-        if (task.level <= 0 || max_edge_length_squared <= SUBDIVISION_EDGE_THRESHOLD_SQUARED) {
-
-            draw_aaline(projected_a, projected_b, accent[0], accent[1], accent[2]);
-            draw_aaline(projected_b, projected_c, accent[0], accent[1], accent[2]);
-            draw_aaline(projected_c, projected_a, accent[0], accent[1], accent[2]);
-            continue;
-        }
-
-        point ab = midpoint(task.a, task.b);
-        point bc = midpoint(task.b, task.c);
-        point ca = midpoint(task.c, task.a);
-
-        tasks[task_count++] = (subdivided_wireframe_task){ab, bc, ca, task.level - 1};
-        tasks[task_count++] = (subdivided_wireframe_task){ca, bc, task.c, task.level - 1};
-        tasks[task_count++] = (subdivided_wireframe_task){ab, task.b, bc, task.level - 1};
-        tasks[task_count++] = (subdivided_wireframe_task){task.a, ab, ca, task.level - 1};
-    }
-}
-
-void print_subdivision_stats(const mesh *m, int level) {
-    unsigned long long vertices = (unsigned long long)m->point_count;
-    unsigned long long edges = (unsigned long long)m->edge_count;
-    unsigned long long triangles = (unsigned long long)m->triangle_count;
-
-    for (int i = 0; i < level; i++) {
-        unsigned long long next_vertices = vertices + edges;
-        unsigned long long next_edges = 2ULL * edges + 3ULL * triangles;
-        unsigned long long next_triangles = 4ULL * triangles;
-
-        vertices = next_vertices;
-        edges = next_edges;
-        triangles = next_triangles;
-    }
-
-    // subdivision yields triangular faces, so face and triangle counts are equivalent
-    unsigned long long faces = triangles;
-
+void print_lod_mesh_stats(int level, const lod_mesh *lod) {
     printf(
-        "Subdivision level: %d | vertices: %llu | faces: %llu | triangles: %llu\n",
+        "Subdivision level: %d | vertices: %d | faces: %d | triangles: %d\n",
         level,
-        vertices,
-        faces,
-        triangles
+        lod->point_count,
+        lod->triangle_count,
+        lod->triangle_count
     );
 }
 
@@ -517,14 +388,27 @@ int main(int argc, char *argv[]) {
     // setup the display window
     if (!init_renderer(WIDTH, HEIGHT, "Graphix")) return 1;
 
-    // temporary storage for projected points each frame
-    point *projected = malloc(sizeof(point) * m.point_count);
-    point *camera_space = malloc(sizeof(point) * m.point_count);
-    point *triangle_normal = malloc(sizeof(point) * m.triangle_count);
-    int *triangle_front = malloc(sizeof(int) * m.triangle_count);
+    lod_mesh lods[MAX_SUBDIVIDE_LEVEL + 1];
+    for (int i = 0; i <= MAX_SUBDIVIDE_LEVEL; i++) {
+        lods[i] = (lod_mesh){0};
+        lods[i].gpu_mesh_id = -1;
+    }
+
+    if (!build_base_lod(&m, &lods[0])) {
+        free_lod_mesh(&lods[0]);
+        quit_renderer();
+        free_mesh(&m);
+        printf("Error: failed to build base GPU mesh\n");
+        return 1;
+    }
+    int max_built_lod = 0;
+    print_lod_mesh_stats(0, &lods[0]);
 
     // track frame time for frame-rate independent rotation
     double last_time = glfwGetTime();
+
+    const char *autoshot_ppm_path = getenv("GRAPHIX_AUTOSHOT_PPM");
+    int autoshot_done = 0;
 
     // toggles pure wireframe mode (off by default)
     int wireframe_view = 0;
@@ -546,7 +430,6 @@ int main(int argc, char *argv[]) {
         last_time = current_time;
         // handle quit events like closing window or pressing escape
         if (events_quit()) {
-            quit_renderer();
             break;
         }
 
@@ -562,12 +445,36 @@ int main(int argc, char *argv[]) {
         int is_minus_down = key_down(GLFW_KEY_MINUS);
 
         if (is_plus_down && !was_plus_down && subdivision_level < MAX_SUBDIVIDE_LEVEL) {
-            subdivision_level++;
-            print_subdivision_stats(&m, subdivision_level);
+            int requested_level = subdivision_level + 1;
+            int build_ok = 1;
+
+            while (max_built_lod < requested_level) {
+                int next_level = max_built_lod + 1;
+                free_lod_mesh(&lods[next_level]);
+
+                if (!build_next_lod(&lods[max_built_lod], &lods[next_level])) {
+                    free_lod_mesh(&lods[next_level]);
+                    build_ok = 0;
+                    break;
+                }
+
+                max_built_lod = next_level;
+            }
+
+            if (build_ok) {
+                subdivision_level = requested_level;
+                print_lod_mesh_stats(subdivision_level, &lods[subdivision_level]);
+            } else {
+                printf(
+                    "Subdivision level %d could not be built; staying on level %d\n",
+                    requested_level,
+                    subdivision_level
+                );
+            }
         }
         if (is_minus_down && !was_minus_down && subdivision_level > 0) {
             subdivision_level--;
-            print_subdivision_stats(&m, subdivision_level);
+            print_lod_mesh_stats(subdivision_level, &lods[subdivision_level]);
         }
 
         was_plus_down = is_plus_down;
@@ -605,159 +512,41 @@ int main(int argc, char *argv[]) {
             (point){0.0f, 0.0f, camera_distance, 1.0f}
         );
 
-        // process math for each point in 3D space
-        for (int i = 0; i < m.point_count; i++) {
-            point transformed = transform_point(model_to_camera, m.points[i]);
-            camera_space[i] = transformed;
+        int active_level = subdivision_level;
+        if (active_level > max_built_lod) active_level = max_built_lod;
 
-            // map to flat 2D screen co-ordinates and apply camera pan
-            point proj = convert(transformed);
-            proj.x += camera_x;
-            proj.y += camera_y;
-            projected[i] = proj;
-        }
+        float model_to_camera_array[16];
+        mat4_to_array(&model_to_camera, model_to_camera_array);
 
-        // classify triangles by camera-facing direction
-        point object_centre = (point){0.0f, 0.0f, camera_distance, 1.0f};
+        renderer_draw_mesh(
+            lods[active_level].gpu_mesh_id,
+            model_to_camera_array,
+            camera_x,
+            camera_y,
+            wireframe_view,
+            face_base_colour[0],
+            face_base_colour[1],
+            face_base_colour[2],
+            accent[0],
+            accent[1],
+            accent[2]
+        );
 
-        for (int i = 0; i < m.triangle_count; i++) {
-            triangle t = m.triangles[i];
-            point pa = camera_space[t.a];
-            point pb = camera_space[t.b];
-            point pc = camera_space[t.c];
-
-            point ab = subtract(pb, pa);
-            point ac = subtract(pc, pa);
-            point normal = cross(ab, ac);
-
-            point centroid = (point){
-                (pa.x + pb.x + pc.x) / 3.0f,
-                (pa.y + pb.y + pc.y) / 3.0f,
-                (pa.z + pb.z + pc.z) / 3.0f,
-                1.0f
-            };
-
-            // keep normals pointing away from the object centre before doing lighting
-            point outward = subtract(centroid, object_centre);
-            if (dot(normal, outward) < 0.0f) {
-                normal.x = -normal.x;
-                normal.y = -normal.y;
-                normal.z = -normal.z;
+        if (autoshot_ppm_path && !autoshot_done) {
+            if (renderer_capture_framebuffer_ppm(autoshot_ppm_path)) {
+                printf("Saved framebuffer snapshot to %s\n", autoshot_ppm_path);
+            } else {
+                printf("Error: failed to save framebuffer snapshot to %s\n", autoshot_ppm_path);
             }
-
-            normal = normalise(normal);
-            triangle_normal[i] = normal;
-
-            point to_camera = (point){-centroid.x, -centroid.y, -centroid.z, 0.0f};
-            float facing = dot(normal, to_camera);
-            triangle_front[i] = facing > 0.0f;
-        }
-
-        // draw either shaded faces or pure wireframe
-        if (!wireframe_view) {
-            // depth testing now handles visibility, so no CPU painter sort is needed
-            begin_triangle_batch();
-            for (int t_index = 0; t_index < m.triangle_count; t_index++) {
-                if (!triangle_front[t_index]) continue;
-                triangle t = m.triangles[t_index];
-                point projected_a = projected[t.a];
-                point projected_b = projected[t.b];
-                point projected_c = projected[t.c];
-
-                point base_normal = triangle_normal[t_index];
-
-                point normal_a = averaged_vertex_normal(
-                    t.a,
-                    base_normal,
-                    &m,
-                    triangle_normal
-                );
-                point normal_b = averaged_vertex_normal(
-                    t.b,
-                    base_normal,
-                    &m,
-                    triangle_normal
-                );
-                point normal_c = averaged_vertex_normal(
-                    t.c,
-                    base_normal,
-                    &m,
-                    triangle_normal
-                );
-
-                float shade_a = lambert_intensity(normal_a, camera_space[t.a]);
-                float shade_b = lambert_intensity(normal_b, camera_space[t.b]);
-                float shade_c = lambert_intensity(normal_c, camera_space[t.c]);
-
-                int red_a = (int)(face_base_colour[0] * shade_a);
-                int green_a = (int)(face_base_colour[1] * shade_a);
-                int blue_a = (int)(face_base_colour[2] * shade_a);
-
-                int red_b = (int)(face_base_colour[0] * shade_b);
-                int green_b = (int)(face_base_colour[1] * shade_b);
-                int blue_b = (int)(face_base_colour[2] * shade_b);
-
-                int red_c = (int)(face_base_colour[0] * shade_c);
-                int green_c = (int)(face_base_colour[1] * shade_c);
-                int blue_c = (int)(face_base_colour[2] * shade_c);
-
-                if (subdivision_level <= 0) {
-                    draw_triangle(
-                        projected_a,
-                        projected_b,
-                        projected_c,
-                        red_a,
-                        green_a,
-                        blue_a,
-                        red_b,
-                        green_b,
-                        blue_b,
-                        red_c,
-                        green_c,
-                        blue_c
-                    );
-                } else {
-                    point camera_a = camera_space[t.a];
-                    point camera_b = camera_space[t.b];
-                    point camera_c = camera_space[t.c];
-
-                    draw_subdivided_triangle(
-                        camera_a,
-                        camera_b,
-                        camera_c,
-                        red_a,
-                        green_a,
-                        blue_a,
-                        red_b,
-                        green_b,
-                        blue_b,
-                        red_c,
-                        green_c,
-                        blue_c,
-                        subdivision_level,
-                        camera_x,
-                        camera_y
-                    );
-                }
-            }
-            end_triangle_batch();
-
-        } else {
-            begin_line_batch();
-            for (int i = 0; i < m.triangle_count; i++) {
-                if (!triangle_front[i]) continue;
-                triangle t = m.triangles[i];
-
-                point camera_a = camera_space[t.a];
-                point camera_b = camera_space[t.b];
-                point camera_c = camera_space[t.c];
-                draw_subdivided_wireframe_triangle(camera_a, camera_b, camera_c, subdivision_level, camera_x, camera_y);
-            }
-            end_line_batch();
+            autoshot_done = 1;
         }
 
         // render to the physical screen
         update_display();
+
+        if (autoshot_done) {
+            break;
+        }
 
         // rotate for next frame (scaled by delta time for frame-rate independence)
         angle_x += 0.5f * dt;
@@ -771,10 +560,11 @@ int main(int argc, char *argv[]) {
     }
 
     // prevent memory leaks
-    free(projected);
-    free(camera_space);
-    free(triangle_normal);
-    free(triangle_front);
+    for (int i = 0; i <= MAX_SUBDIVIDE_LEVEL; i++) {
+        free_lod_mesh(&lods[i]);
+    }
+
+    quit_renderer();
     free_mesh(&m);
     return 0;
 }
