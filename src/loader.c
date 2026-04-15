@@ -110,6 +110,38 @@ mesh load_obj(const char *filename) {
 
     m.triangle_count = triangle_count;
     m.triangles = realloc(triangles, triangle_count * sizeof(triangle));
+
+    // build per-vertex triangle adjacency once so normal lookups do not scan the whole mesh every frame
+    if (point_count > 0) {
+        m.vertex_adjacencies = calloc(point_count, sizeof(vertex_adjacency));
+
+        int *triangle_counts = calloc(point_count, sizeof(int));
+        int *triangle_offsets = calloc(point_count, sizeof(int));
+
+        for (int i = 0; i < triangle_count; i++) {
+            triangle t = m.triangles[i];
+            triangle_counts[t.a]++;
+            triangle_counts[t.b]++;
+            triangle_counts[t.c]++;
+        }
+
+        for (int i = 0; i < point_count; i++) {
+            m.vertex_adjacencies[i].triangle_count = triangle_counts[i];
+            if (triangle_counts[i] > 0) {
+                m.vertex_adjacencies[i].triangle_indices = malloc(triangle_counts[i] * sizeof(int));
+            }
+        }
+
+        for (int i = 0; i < triangle_count; i++) {
+            triangle t = m.triangles[i];
+            m.vertex_adjacencies[t.a].triangle_indices[triangle_offsets[t.a]++] = i;
+            m.vertex_adjacencies[t.b].triangle_indices[triangle_offsets[t.b]++] = i;
+            m.vertex_adjacencies[t.c].triangle_indices[triangle_offsets[t.c]++] = i;
+        }
+
+        free(triangle_counts);
+        free(triangle_offsets);
+    }
     
     printf("Loaded '%s' successfully: %d vertices, %d faces, %d triangles\n", filename, point_count, face_count, triangle_count);
         
@@ -152,7 +184,16 @@ void free_mesh(mesh *m) {
     if (m->points) free(m->points);
     if (m->edges) free(m->edges);
     if (m->triangles) free(m->triangles);
+    if (m->vertex_adjacencies) {
+        for (int i = 0; i < m->point_count; i++) {
+            if (m->vertex_adjacencies[i].triangle_indices) {
+                free(m->vertex_adjacencies[i].triangle_indices);
+            }
+        }
+        free(m->vertex_adjacencies);
+    }
     m->point_count = 0;
     m->edge_count = 0;
     m->triangle_count = 0;
+    m->vertex_adjacencies = NULL;
 }

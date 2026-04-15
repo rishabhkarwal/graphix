@@ -12,7 +12,7 @@
 #define EPSILON 0.000001f
 #define NORMAL_SIMILARITY_THRESHOLD 0.70710678f // cos(45) - only smooth across edges where angle is at most about 45
 #define MAX_SUBDIVIDE_LEVEL 7
-#define SUBDIVISION_EDGE_THRESHOLD 12.0f // stop subdividing once the triangle is this small on screen
+#define SUBDIVISION_EDGE_THRESHOLD 5.0f // stop subdividing once the triangle is this small on screen
 #define SUBDIVISION_EDGE_THRESHOLD_SQUARED (SUBDIVISION_EDGE_THRESHOLD * SUBDIVISION_EDGE_THRESHOLD)
 
 int background[3] = {0, 0, 0};
@@ -93,15 +93,30 @@ point averaged_vertex_normal(
 ) {
     point sum = {0.0f, 0.0f, 0.0f};
 
-    for (int i = 0; i < m->triangle_count; i++) {
-        if (!triangle_contains_vertex(m->triangles[i], vertex_index)) continue;
+    if (m->vertex_adjacencies) {
+        vertex_adjacency adjacency = m->vertex_adjacencies[vertex_index];
 
-        float normal_similarity = dot(triangle_normal[i], reference_normal);
-        if (normal_similarity < NORMAL_SIMILARITY_THRESHOLD) continue;
+        for (int i = 0; i < adjacency.triangle_count; i++) {
+            int triangle_index = adjacency.triangle_indices[i];
 
-        sum.x += triangle_normal[i].x;
-        sum.y += triangle_normal[i].y;
-        sum.z += triangle_normal[i].z;
+            float normal_similarity = dot(triangle_normal[triangle_index], reference_normal);
+            if (normal_similarity < NORMAL_SIMILARITY_THRESHOLD) continue;
+
+            sum.x += triangle_normal[triangle_index].x;
+            sum.y += triangle_normal[triangle_index].y;
+            sum.z += triangle_normal[triangle_index].z;
+        }
+    } else {
+        for (int i = 0; i < m->triangle_count; i++) {
+            if (!triangle_contains_vertex(m->triangles[i], vertex_index)) continue;
+
+            float normal_similarity = dot(triangle_normal[i], reference_normal);
+            if (normal_similarity < NORMAL_SIMILARITY_THRESHOLD) continue;
+
+            sum.x += triangle_normal[i].x;
+            sum.y += triangle_normal[i].y;
+            sum.z += triangle_normal[i].z;
+        }
     }
 
     point averaged = normalise(sum);

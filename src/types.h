@@ -16,6 +16,12 @@ typedef struct {
     int a, b, c;
 } triangle;
 
+// triangles touching a vertex, built once at load time for fast normal lookup
+typedef struct {
+    int *triangle_indices;
+    int triangle_count;
+} vertex_adjacency;
+
 // 3D object composed of points and edges
 typedef struct {
     point *points;
@@ -26,6 +32,8 @@ typedef struct {
 
     triangle *triangles;
     int triangle_count;
+
+    vertex_adjacency *vertex_adjacencies;
 } mesh;
 
 #endif
