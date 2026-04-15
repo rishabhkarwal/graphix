@@ -9,10 +9,11 @@
 #define HEIGHT 600
 #define PI 3.14159265359f
 #define TAU (2.0f * PI)
+#define EPSILON 0.000001f
 
 int background[3] = {0, 0, 0};
 int accent[3]     = {255, 255, 255};
-int face_colour[3] = {28, 28, 28};
+int face_base_colour[3] = {200, 200, 200};
 
 point project(point position, float scale) {
     // projects 3D co-ordinate to 2D plane
@@ -99,6 +100,7 @@ int main(int argc, char *argv[]) {
     int *triangle_front = malloc(sizeof(int) * m.triangle_count);
     int *triangle_order = malloc(sizeof(int) * m.triangle_count);
     float *triangle_depth = malloc(sizeof(float) * m.triangle_count);
+    float *triangle_shade = malloc(sizeof(float) * m.triangle_count);
 
     // track frame time for frame-rate independent rotation
     double last_time = glfwGetTime();
@@ -173,6 +175,22 @@ int main(int argc, char *argv[]) {
             point to_camera = (point){-centroid.x, -centroid.y, -centroid.z};
             float facing = dot(normal, to_camera);
             triangle_front[i] = facing > 0.0f;
+
+            // flat lambert shading from light at camera origin
+            float normal_length = sqrtf(dot(normal, normal));
+            float light_length = sqrtf(dot(to_camera, to_camera));
+            float diffuse = 0.0f;
+            if (normal_length > EPSILON && light_length > EPSILON) {
+                diffuse = dot(normal, to_camera) / (normal_length * light_length);
+                if (diffuse < 0.0f) diffuse = 0.0f;
+            }
+
+            // ambient + diffuse balance
+            const float ambient = 0.15f;
+            const float diffuse_strength = 0.85f;
+            float intensity = ambient + diffuse_strength * diffuse;
+            if (intensity > 1.0f) intensity = 1.0f;
+            triangle_shade[i] = intensity;
         }
 
         // draw either mesh edges or triangulation edges
@@ -197,11 +215,16 @@ int main(int argc, char *argv[]) {
             }
 
             for (int i = 0; i < front_count; i++) {
-                triangle t = m.triangles[triangle_order[i]];
+                int t_index = triangle_order[i];
+                triangle t = m.triangles[t_index];
                 point a = projected[t.a];
                 point b = projected[t.b];
                 point c = projected[t.c];
-                draw_triangle(a, b, c, face_colour[0], face_colour[1], face_colour[2]);
+
+                int red = (int)(face_base_colour[0] * triangle_shade[t_index]);
+                int green = (int)(face_base_colour[1] * triangle_shade[t_index]);
+                int blue = (int)(face_base_colour[2] * triangle_shade[t_index]);
+                draw_triangle(a, b, c, red, green, blue);
             }
 
             // overlay visible wireframe edges
@@ -258,6 +281,7 @@ int main(int argc, char *argv[]) {
     free(triangle_front);
     free(triangle_order);
     free(triangle_depth);
+    free(triangle_shade);
     free_mesh(&m);
     return 0;
 }

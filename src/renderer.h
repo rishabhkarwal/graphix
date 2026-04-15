@@ -11,7 +11,7 @@ int key_down(int key);
 
 // drawing functions
 void fill_background(int r, int g, int b);
-void draw_triangle(point a, point b, point c, int r, int g, int b_colour);
+void draw_triangle(point a, point b, point c, int red, int green, int blue);
 void draw_aaline(point start, point end, int r, int g, int b);
 void update_display(void);
 
