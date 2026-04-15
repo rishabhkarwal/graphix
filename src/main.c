@@ -11,7 +11,7 @@
 #define TAU (2.0f * PI)
 #define EPSILON 0.000001f
 #define NORMAL_SIMILARITY_THRESHOLD 0.70710678f // cos(45) - only smooth across edges where angle is at most about 45
-#define MAX_SUBDIVIDE_LEVEL 6
+#define MAX_SUBDIVIDE_LEVEL 7
 
 int background[3] = {0, 0, 0};
 int accent[3]     = {255, 255, 255};
@@ -86,14 +86,13 @@ int triangle_contains_vertex(triangle t, int vertex_index) {
 point averaged_vertex_normal(
     int vertex_index,
     point reference_normal,
-    triangle *triangles,
-    point *triangle_normal,
-    int triangle_count
+    const mesh *m,
+    const point *triangle_normal
 ) {
     point sum = {0.0f, 0.0f, 0.0f};
 
-    for (int i = 0; i < triangle_count; i++) {
-        if (!triangle_contains_vertex(triangles[i], vertex_index)) continue;
+    for (int i = 0; i < m->triangle_count; i++) {
+        if (!triangle_contains_vertex(m->triangles[i], vertex_index)) continue;
 
         float normal_similarity = dot(triangle_normal[i], reference_normal);
         if (normal_similarity < NORMAL_SIMILARITY_THRESHOLD) continue;
@@ -505,6 +504,7 @@ int main(int argc, char *argv[]) {
                 triangle_order[j + 1] = key;
             }
 
+            begin_triangle_batch();
             for (int i = 0; i < front_count; i++) {
                 int t_index = triangle_order[i];
                 triangle t = m.triangles[t_index];
@@ -517,23 +517,20 @@ int main(int argc, char *argv[]) {
                 point normal_a = averaged_vertex_normal(
                     t.a,
                     base_normal,
-                    m.triangles,
-                    triangle_normal,
-                    m.triangle_count
+                    &m,
+                    triangle_normal
                 );
                 point normal_b = averaged_vertex_normal(
                     t.b,
                     base_normal,
-                    m.triangles,
-                    triangle_normal,
-                    m.triangle_count
+                    &m,
+                    triangle_normal
                 );
                 point normal_c = averaged_vertex_normal(
                     t.c,
                     base_normal,
-                    m.triangles,
-                    triangle_normal,
-                    m.triangle_count
+                    &m,
+                    triangle_normal
                 );
 
                 float shade_a = lambert_intensity(normal_a, camera_space[t.a]);
@@ -589,8 +586,10 @@ int main(int argc, char *argv[]) {
                     );
                 }
             }
+            end_triangle_batch();
 
         } else {
+            begin_line_batch();
             for (int i = 0; i < m.triangle_count; i++) {
                 if (!triangle_front[i]) continue;
                 triangle t = m.triangles[i];
@@ -600,6 +599,7 @@ int main(int argc, char *argv[]) {
                 point camera_c = camera_space[t.c];
                 draw_subdivided_wireframe_triangle(camera_a, camera_b, camera_c, subdivision_level);
             }
+            end_line_batch();
         }
 
         // render to the physical screen

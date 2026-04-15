@@ -11,6 +11,10 @@ int key_down(int key);
 
 // drawing functions
 void fill_background(int r, int g, int b);
+void begin_triangle_batch(void);
+void end_triangle_batch(void);
+void begin_line_batch(void);
+void end_line_batch(void);
 void draw_triangle(
     point a,
     point b,

@@ -9,6 +9,8 @@ static int HEIGHT = 0;
 static double last_time = 0;
 static int frames = 0;
 static double current_fps = 60.0;
+static int triangle_batch_active = 0;
+static int line_batch_active = 0;
 
 int init_renderer(int width, int height, const char *title) {
     WIDTH = width; HEIGHT = height;
@@ -64,6 +66,30 @@ void fill_background(int r, int g, int b) {
     glClear(GL_COLOR_BUFFER_BIT);
 }
 
+void begin_triangle_batch(void) {
+    if (triangle_batch_active) return;
+    glBegin(GL_TRIANGLES);
+    triangle_batch_active = 1;
+}
+
+void end_triangle_batch(void) {
+    if (!triangle_batch_active) return;
+    glEnd();
+    triangle_batch_active = 0;
+}
+
+void begin_line_batch(void) {
+    if (line_batch_active) return;
+    glBegin(GL_LINES);
+    line_batch_active = 1;
+}
+
+void end_line_batch(void) {
+    if (!line_batch_active) return;
+    glEnd();
+    line_batch_active = 0;
+}
+
 void draw_triangle(
     point a,
     point b,
@@ -79,7 +105,7 @@ void draw_triangle(
     int blue_c
 ) {
     // draws a triangle with per-vertex colours for smooth shading
-    glBegin(GL_TRIANGLES);
+    if (!triangle_batch_active) glBegin(GL_TRIANGLES);
     glColor3f(red_a / 255.0f, green_a / 255.0f, blue_a / 255.0f);
     glVertex2f(a.x, a.y);
 
@@ -88,16 +114,16 @@ void draw_triangle(
 
     glColor3f(red_c / 255.0f, green_c / 255.0f, blue_c / 255.0f);
     glVertex2f(c.x, c.y);
-    glEnd();
+    if (!triangle_batch_active) glEnd();
 }
 
 void draw_aaline(point start, point end, int r, int g, int b) {
     // draws an anti-aliased line between two co-ordinates
     glColor3f(r / 255.0f, g / 255.0f, b / 255.0f);
-    glBegin(GL_LINES);
+    if (!line_batch_active) glBegin(GL_LINES);
     glVertex2f(start.x, start.y);
     glVertex2f(end.x, end.y);
-    glEnd();
+    if (!line_batch_active) glEnd();
 }
 
 void update_display(void) {
