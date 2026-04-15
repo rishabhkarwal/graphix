@@ -149,128 +149,183 @@ void draw_subdivided_triangle(
     int blue_c,
     int level
 ) {
-    if (level <= 0) {
-        // project only at draw time to preserve perspective-correct splits
-        point projected_a = convert(a);
-        point projected_b = convert(b);
-        point projected_c = convert(c);
+    typedef struct {
+        point a;
+        point b;
+        point c;
+        int red_a;
+        int green_a;
+        int blue_a;
+        int red_b;
+        int green_b;
+        int blue_b;
+        int red_c;
+        int green_c;
+        int blue_c;
+        int level;
+    } subdivided_triangle_task;
 
-        draw_triangle(
-            projected_a,
-            projected_b,
-            projected_c,
-            red_a,
-            green_a,
-            blue_a,
-            red_b,
-            green_b,
-            blue_b,
-            red_c,
-            green_c,
-            blue_c
-        );
-        return;
-    }
+    static subdivided_triangle_task tasks[1 << (MAX_SUBDIVIDE_LEVEL * 2)];
+    int task_count = 0;
 
-    point ab = midpoint(a, b);
-    point bc = midpoint(b, c);
-    point ca = midpoint(c, a);
-
-    int red_ab = midpoint_channel(red_a, red_b);
-    int green_ab = midpoint_channel(green_a, green_b);
-    int blue_ab = midpoint_channel(blue_a, blue_b);
-
-    int red_bc = midpoint_channel(red_b, red_c);
-    int green_bc = midpoint_channel(green_b, green_c);
-    int blue_bc = midpoint_channel(blue_b, blue_c);
-
-    int red_ca = midpoint_channel(red_c, red_a);
-    int green_ca = midpoint_channel(green_c, green_a);
-    int blue_ca = midpoint_channel(blue_c, blue_a);
-
-    draw_subdivided_triangle(
+    tasks[task_count++] = (subdivided_triangle_task){
         a,
-        ab,
-        ca,
+        b,
+        c,
         red_a,
         green_a,
         blue_a,
-        red_ab,
-        green_ab,
-        blue_ab,
-        red_ca,
-        green_ca,
-        blue_ca,
-        level - 1
-    );
-    draw_subdivided_triangle(
-        ab,
-        b,
-        bc,
-        red_ab,
-        green_ab,
-        blue_ab,
         red_b,
         green_b,
         blue_b,
-        red_bc,
-        green_bc,
-        blue_bc,
-        level - 1
-    );
-    draw_subdivided_triangle(
-        ca,
-        bc,
-        c,
-        red_ca,
-        green_ca,
-        blue_ca,
-        red_bc,
-        green_bc,
-        blue_bc,
         red_c,
         green_c,
         blue_c,
-        level - 1
-    );
-    draw_subdivided_triangle(
-        ab,
-        bc,
-        ca,
-        red_ab,
-        green_ab,
-        blue_ab,
-        red_bc,
-        green_bc,
-        blue_bc,
-        red_ca,
-        green_ca,
-        blue_ca,
-        level - 1
-    );
+        level
+    };
+
+    while (task_count > 0) {
+        subdivided_triangle_task task = tasks[--task_count];
+
+        if (task.level <= 0) {
+            // project only at draw time to preserve perspective-correct splits
+            point projected_a = convert(task.a);
+            point projected_b = convert(task.b);
+            point projected_c = convert(task.c);
+
+            draw_triangle(
+                projected_a,
+                projected_b,
+                projected_c,
+                task.red_a,
+                task.green_a,
+                task.blue_a,
+                task.red_b,
+                task.green_b,
+                task.blue_b,
+                task.red_c,
+                task.green_c,
+                task.blue_c
+            );
+            continue;
+        }
+
+        point ab = midpoint(task.a, task.b);
+        point bc = midpoint(task.b, task.c);
+        point ca = midpoint(task.c, task.a);
+
+        int red_ab = midpoint_channel(task.red_a, task.red_b);
+        int green_ab = midpoint_channel(task.green_a, task.green_b);
+        int blue_ab = midpoint_channel(task.blue_a, task.blue_b);
+
+        int red_bc = midpoint_channel(task.red_b, task.red_c);
+        int green_bc = midpoint_channel(task.green_b, task.green_c);
+        int blue_bc = midpoint_channel(task.blue_b, task.blue_c);
+
+        int red_ca = midpoint_channel(task.red_c, task.red_a);
+        int green_ca = midpoint_channel(task.green_c, task.green_a);
+        int blue_ca = midpoint_channel(task.blue_c, task.blue_a);
+
+        tasks[task_count++] = (subdivided_triangle_task){
+            ab,
+            bc,
+            ca,
+            red_ab,
+            green_ab,
+            blue_ab,
+            red_bc,
+            green_bc,
+            blue_bc,
+            red_ca,
+            green_ca,
+            blue_ca,
+            task.level - 1
+        };
+        tasks[task_count++] = (subdivided_triangle_task){
+            ca,
+            bc,
+            task.c,
+            red_ca,
+            green_ca,
+            blue_ca,
+            red_bc,
+            green_bc,
+            blue_bc,
+            task.red_c,
+            task.green_c,
+            task.blue_c,
+            task.level - 1
+        };
+        tasks[task_count++] = (subdivided_triangle_task){
+            ab,
+            task.b,
+            bc,
+            red_ab,
+            green_ab,
+            blue_ab,
+            task.red_b,
+            task.green_b,
+            task.blue_b,
+            red_bc,
+            green_bc,
+            blue_bc,
+            task.level - 1
+        };
+        tasks[task_count++] = (subdivided_triangle_task){
+            task.a,
+            ab,
+            ca,
+            task.red_a,
+            task.green_a,
+            task.blue_a,
+            red_ab,
+            green_ab,
+            blue_ab,
+            red_ca,
+            green_ca,
+            blue_ca,
+            task.level - 1
+        };
+    }
 }
 
 void draw_subdivided_wireframe_triangle(point a, point b, point c, int level) {
-    if (level <= 0) {
-        // project only at draw time to preserve perspective-correct splits
-        point projected_a = convert(a);
-        point projected_b = convert(b);
-        point projected_c = convert(c);
+    typedef struct {
+        point a;
+        point b;
+        point c;
+        int level;
+    } subdivided_wireframe_task;
 
-        draw_aaline(projected_a, projected_b, accent[0], accent[1], accent[2]);
-        draw_aaline(projected_b, projected_c, accent[0], accent[1], accent[2]);
-        draw_aaline(projected_c, projected_a, accent[0], accent[1], accent[2]);
-        return;
+    static subdivided_wireframe_task tasks[1 << (MAX_SUBDIVIDE_LEVEL * 2)];
+    int task_count = 0;
+
+    tasks[task_count++] = (subdivided_wireframe_task){a, b, c, level};
+
+    while (task_count > 0) {
+        subdivided_wireframe_task task = tasks[--task_count];
+
+        if (task.level <= 0) {
+            // project only at draw time to preserve perspective-correct splits
+            point projected_a = convert(task.a);
+            point projected_b = convert(task.b);
+            point projected_c = convert(task.c);
+
+            draw_aaline(projected_a, projected_b, accent[0], accent[1], accent[2]);
+            draw_aaline(projected_b, projected_c, accent[0], accent[1], accent[2]);
+            draw_aaline(projected_c, projected_a, accent[0], accent[1], accent[2]);
+            continue;
+        }
+
+        point ab = midpoint(task.a, task.b);
+        point bc = midpoint(task.b, task.c);
+        point ca = midpoint(task.c, task.a);
+
+        tasks[task_count++] = (subdivided_wireframe_task){ab, bc, ca, task.level - 1};
+        tasks[task_count++] = (subdivided_wireframe_task){ca, bc, task.c, task.level - 1};
+        tasks[task_count++] = (subdivided_wireframe_task){ab, task.b, bc, task.level - 1};
+        tasks[task_count++] = (subdivided_wireframe_task){task.a, ab, ca, task.level - 1};
     }
-
-    point ab = midpoint(a, b);
-    point bc = midpoint(b, c);
-    point ca = midpoint(c, a);
-
-    draw_subdivided_wireframe_triangle(a, ab, ca, level - 1);
-    draw_subdivided_wireframe_triangle(ab, b, bc, level - 1);
-    draw_subdivided_wireframe_triangle(ca, bc, c, level - 1);
-    draw_subdivided_wireframe_triangle(ab, bc, ca, level - 1);
 }
 
 void print_subdivision_stats(const mesh *m, int level) {
