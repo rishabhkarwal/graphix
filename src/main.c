@@ -23,7 +23,7 @@ point project(point position, float scale) {
     // projects 3D co-ordinate to 2D plane
     float x = position.x, y = position.y, z = position.z;
     if (z == 0) z = 0.1f;
-    return (point){x * scale / z, y * scale / z, 0};
+    return (point){x * scale / z, y * scale / z, z};
 }
 
 point convert(point position) {
@@ -151,11 +151,10 @@ int midpoint_channel(int a, int b) {
 }
 
 float point_distance_squared(point a, point b) {
-    // compare distances without paying for a square root
+    // screen-space subdivision tests only care about 2D projected edge length
     float dx = a.x - b.x;
     float dy = a.y - b.y;
-    float dz = a.z - b.z;
-    return dx * dx + dy * dy + dz * dz;
+    return dx * dx + dy * dy;
 }
 
 int triangle_front_facing(point a, point b, point c) {
@@ -463,8 +462,6 @@ int main(int argc, char *argv[]) {
     point *camera_space = malloc(sizeof(point) * m.point_count);
     point *triangle_normal = malloc(sizeof(point) * m.triangle_count);
     int *triangle_front = malloc(sizeof(int) * m.triangle_count);
-    int *triangle_order = malloc(sizeof(int) * m.triangle_count);
-    float *triangle_depth = malloc(sizeof(float) * m.triangle_count);
 
     // track frame time for frame-rate independent rotation
     double last_time = glfwGetTime();
@@ -577,8 +574,6 @@ int main(int argc, char *argv[]) {
                 (pa.z + pb.z + pc.z) / 3.0f
             };
 
-            triangle_depth[i] = centroid.z;
-
             // keep normals pointing away from the object centre before doing lighting
             point outward = subtract(centroid, object_centre);
             if (dot(normal, outward) < 0.0f) {
@@ -597,28 +592,10 @@ int main(int argc, char *argv[]) {
 
         // draw either shaded faces or pure wireframe
         if (!wireframe_view) {
-            // draw front-facing triangles from back to front
-            int front_count = 0;
-            for (int i = 0; i < m.triangle_count; i++) {
-                if (!triangle_front[i]) continue;
-                triangle_order[front_count++] = i;
-            }
-
-            // painter sort by depth (larger z means farther away)
-            for (int i = 1; i < front_count; i++) {
-                int key = triangle_order[i];
-                float key_depth = triangle_depth[key];
-                int j = i - 1;
-                while (j >= 0 && triangle_depth[triangle_order[j]] < key_depth) {
-                    triangle_order[j + 1] = triangle_order[j];
-                    j--;
-                }
-                triangle_order[j + 1] = key;
-            }
-
+            // depth testing now handles visibility, so no CPU painter sort is needed
             begin_triangle_batch();
-            for (int i = 0; i < front_count; i++) {
-                int t_index = triangle_order[i];
+            for (int t_index = 0; t_index < m.triangle_count; t_index++) {
+                if (!triangle_front[t_index]) continue;
                 triangle t = m.triangles[t_index];
                 point projected_a = projected[t.a];
                 point projected_b = projected[t.b];
@@ -735,8 +712,6 @@ int main(int argc, char *argv[]) {
     free(camera_space);
     free(triangle_normal);
     free(triangle_front);
-    free(triangle_order);
-    free(triangle_depth);
     free_mesh(&m);
     return 0;
 }
