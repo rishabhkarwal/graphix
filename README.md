@@ -22,8 +22,14 @@ make
 
 ## Controls
 
-- **ESC** - Close window
-- **SPACE** - Toggle triangle debug view
+| Key | Action |
+| --- | --- |
+| **ESC** | Close window |
+| **SPACE** | Toggle wireframe debug view |
+| **+** | Increase subdivision level |
+| **-** | Decrease subdivision level |
+
+Subdivision controls are intended for performance testing to measure optimisation effects
 
 ## Requirements
 

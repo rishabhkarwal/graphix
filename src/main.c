@@ -11,6 +11,7 @@
 #define TAU (2.0f * PI)
 #define EPSILON 0.000001f
 #define NORMAL_SIMILARITY_THRESHOLD 0.70710678f // cos(45) - only smooth across edges where angle is at most about 45
+#define MAX_SUBDIVIDE_LEVEL 6
 
 int background[3] = {0, 0, 0};
 int accent[3]     = {255, 255, 255};
@@ -121,6 +122,157 @@ float lambert_intensity(point normal, point position) {
     return intensity;
 }
 
+point midpoint(point a, point b) {
+    return (point){
+        (a.x + b.x) * 0.5f,
+        (a.y + b.y) * 0.5f,
+        (a.z + b.z) * 0.5f
+    };
+}
+
+int midpoint_channel(int a, int b) {
+    return (a + b) / 2;
+}
+
+void draw_subdivided_triangle(
+    point a,
+    point b,
+    point c,
+    int red_a,
+    int green_a,
+    int blue_a,
+    int red_b,
+    int green_b,
+    int blue_b,
+    int red_c,
+    int green_c,
+    int blue_c,
+    int level
+) {
+    if (level <= 0) {
+        // project only at draw time to preserve perspective-correct splits
+        point projected_a = convert(a);
+        point projected_b = convert(b);
+        point projected_c = convert(c);
+
+        draw_triangle(
+            projected_a,
+            projected_b,
+            projected_c,
+            red_a,
+            green_a,
+            blue_a,
+            red_b,
+            green_b,
+            blue_b,
+            red_c,
+            green_c,
+            blue_c
+        );
+        return;
+    }
+
+    point ab = midpoint(a, b);
+    point bc = midpoint(b, c);
+    point ca = midpoint(c, a);
+
+    int red_ab = midpoint_channel(red_a, red_b);
+    int green_ab = midpoint_channel(green_a, green_b);
+    int blue_ab = midpoint_channel(blue_a, blue_b);
+
+    int red_bc = midpoint_channel(red_b, red_c);
+    int green_bc = midpoint_channel(green_b, green_c);
+    int blue_bc = midpoint_channel(blue_b, blue_c);
+
+    int red_ca = midpoint_channel(red_c, red_a);
+    int green_ca = midpoint_channel(green_c, green_a);
+    int blue_ca = midpoint_channel(blue_c, blue_a);
+
+    draw_subdivided_triangle(
+        a,
+        ab,
+        ca,
+        red_a,
+        green_a,
+        blue_a,
+        red_ab,
+        green_ab,
+        blue_ab,
+        red_ca,
+        green_ca,
+        blue_ca,
+        level - 1
+    );
+    draw_subdivided_triangle(
+        ab,
+        b,
+        bc,
+        red_ab,
+        green_ab,
+        blue_ab,
+        red_b,
+        green_b,
+        blue_b,
+        red_bc,
+        green_bc,
+        blue_bc,
+        level - 1
+    );
+    draw_subdivided_triangle(
+        ca,
+        bc,
+        c,
+        red_ca,
+        green_ca,
+        blue_ca,
+        red_bc,
+        green_bc,
+        blue_bc,
+        red_c,
+        green_c,
+        blue_c,
+        level - 1
+    );
+    draw_subdivided_triangle(
+        ab,
+        bc,
+        ca,
+        red_ab,
+        green_ab,
+        blue_ab,
+        red_bc,
+        green_bc,
+        blue_bc,
+        red_ca,
+        green_ca,
+        blue_ca,
+        level - 1
+    );
+}
+
+void draw_subdivided_wireframe_triangle(point a, point b, point c, int level) {
+    if (level <= 0) {
+        // project only at draw time to preserve perspective-correct splits
+        point projected_a = convert(a);
+        point projected_b = convert(b);
+        point projected_c = convert(c);
+
+        draw_aaline(projected_a, projected_b, accent[0], accent[1], accent[2]);
+        draw_aaline(projected_b, projected_c, accent[0], accent[1], accent[2]);
+        draw_aaline(projected_c, projected_a, accent[0], accent[1], accent[2]);
+        return;
+    }
+
+    point ab = midpoint(a, b);
+    point bc = midpoint(b, c);
+    point ca = midpoint(c, a);
+
+    draw_subdivided_wireframe_triangle(a, ab, ca, level - 1);
+    draw_subdivided_wireframe_triangle(ab, b, bc, level - 1);
+    draw_subdivided_wireframe_triangle(ca, bc, c, level - 1);
+    draw_subdivided_wireframe_triangle(ab, bc, ca, level - 1);
+}
+
 int main(int argc, char *argv[]) {
     // fallback to a default model if none presented
     const char *model_name = (argc > 1) ? argv[1] : "cube";
@@ -158,6 +310,9 @@ int main(int argc, char *argv[]) {
     // toggles debug draw mode for triangulation
     int triangle_view = 0;
     int was_space_down = 0;
+    int subdivision_level = 0;
+    int was_plus_down = 0;
+    int was_minus_down = 0;
 
     // primary game loop
     while (1) {
@@ -176,6 +331,22 @@ int main(int argc, char *argv[]) {
             triangle_view = !triangle_view;
         }
         was_space_down = is_space_down;
+
+        // adjust triangle subdivision level for performance testing
+        int is_plus_down = key_down(GLFW_KEY_EQUAL);
+        int is_minus_down = key_down(GLFW_KEY_MINUS);
+
+        if (is_plus_down && !was_plus_down && subdivision_level < MAX_SUBDIVIDE_LEVEL) {
+            subdivision_level++;
+            printf("Subdivision level: %d\n", subdivision_level);
+        }
+        if (is_minus_down && !was_minus_down && subdivision_level > 0) {
+            subdivision_level--;
+            printf("Subdivision level: %d\n", subdivision_level);
+        }
+
+        was_plus_down = is_plus_down;
+        was_minus_down = is_minus_down;
 
         // wipe previous frame with solid colour
         fill_background(background[0], background[1], background[2]);
@@ -255,9 +426,9 @@ int main(int argc, char *argv[]) {
             for (int i = 0; i < front_count; i++) {
                 int t_index = triangle_order[i];
                 triangle t = m.triangles[t_index];
-                point a = projected[t.a];
-                point b = projected[t.b];
-                point c = projected[t.c];
+                point projected_a = projected[t.a];
+                point projected_b = projected[t.b];
+                point projected_c = projected[t.c];
 
                 point base_normal = triangle_normal[t_index];
 
@@ -299,53 +470,84 @@ int main(int argc, char *argv[]) {
                 int green_c = (int)(face_base_colour[1] * shade_c);
                 int blue_c = (int)(face_base_colour[2] * shade_c);
 
-                draw_triangle(
-                    a,
-                    b,
-                    c,
-                    red_a,
-                    green_a,
-                    blue_a,
-                    red_b,
-                    green_b,
-                    blue_b,
-                    red_c,
-                    green_c,
-                    blue_c
-                );
+                if (subdivision_level <= 0) {
+                    draw_triangle(
+                        projected_a,
+                        projected_b,
+                        projected_c,
+                        red_a,
+                        green_a,
+                        blue_a,
+                        red_b,
+                        green_b,
+                        blue_b,
+                        red_c,
+                        green_c,
+                        blue_c
+                    );
+                } else {
+                    point camera_a = camera_space[t.a];
+                    point camera_b = camera_space[t.b];
+                    point camera_c = camera_space[t.c];
+
+                    draw_subdivided_triangle(
+                        camera_a,
+                        camera_b,
+                        camera_c,
+                        red_a,
+                        green_a,
+                        blue_a,
+                        red_b,
+                        green_b,
+                        blue_b,
+                        red_c,
+                        green_c,
+                        blue_c,
+                        subdivision_level
+                    );
+                }
             }
 
             // overlay visible wireframe edges
-            for (int i = 0; i < m.edge_count; i++) {
-                edge e = m.edges[i];
+            if (subdivision_level <= 0) {
+                for (int i = 0; i < m.edge_count; i++) {
+                    edge e = m.edges[i];
 
-                // hidden-line removal for convex wireframe
-                int visible = 0;
-                for (int j = 0; j < m.triangle_count; j++) {
-                    if (!triangle_front[j]) continue;
-                    if (triangle_contains_edge(m.triangles[j], e.start, e.end)) {
-                        visible = 1;
-                        break;
+                    // hidden-line removal for convex wireframe
+                    int visible = 0;
+                    for (int j = 0; j < m.triangle_count; j++) {
+                        if (!triangle_front[j]) continue;
+                        if (triangle_contains_edge(m.triangles[j], e.start, e.end)) {
+                            visible = 1;
+                            break;
+                        }
                     }
-                }
-                if (!visible) continue;
+                    if (!visible) continue;
 
-                point start = projected[e.start];
-                point end = projected[e.end];
-                draw_aaline(start, end, accent[0], accent[1], accent[2]);
+                    point start = projected[e.start];
+                    point end = projected[e.end];
+                    draw_aaline(start, end, accent[0], accent[1], accent[2]);
+                }
+            } else {
+                // when subdivision is enabled, draw subdivided wireframe on visible triangles
+                for (int i = 0; i < front_count; i++) {
+                    int t_index = triangle_order[i];
+                    triangle t = m.triangles[t_index];
+                    point camera_a = camera_space[t.a];
+                    point camera_b = camera_space[t.b];
+                    point camera_c = camera_space[t.c];
+                    draw_subdivided_wireframe_triangle(camera_a, camera_b, camera_c, subdivision_level);
+                }
             }
         } else {
             for (int i = 0; i < m.triangle_count; i++) {
                 if (!triangle_front[i]) continue;
                 triangle t = m.triangles[i];
 
-                point a = projected[t.a];
-                point b = projected[t.b];
-                point c = projected[t.c];
-
-                draw_aaline(a, b, accent[0], accent[1], accent[2]);
-                draw_aaline(b, c, accent[0], accent[1], accent[2]);
-                draw_aaline(c, a, accent[0], accent[1], accent[2]);
+                point camera_a = camera_space[t.a];
+                point camera_b = camera_space[t.b];
+                point camera_c = camera_space[t.c];
+                draw_subdivided_wireframe_triangle(camera_a, camera_b, camera_c, subdivision_level);
             }
         }
 

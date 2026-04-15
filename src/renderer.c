@@ -20,7 +20,7 @@ int init_renderer(int width, int height, const char *title) {
     if (!screen) return 0;
     
     glfwMakeContextCurrent(screen);
-    glfwSwapInterval(1); // 0 = unlocked fps, 1 = vsync (monitor refresh rate)
+    glfwSwapInterval(0); // 0 = unlocked fps, 1 = vsync (monitor refresh rate)
     
     // setup 2D cartesian orthographic view (origin at centre, y points up)
     glMatrixMode(GL_PROJECTION);
