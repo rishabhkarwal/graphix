@@ -36,6 +36,7 @@ point subtract(point a, point b);
 point cross(point a, point b);
 float dot(point a, point b);
 point midpoint(point a, point b);
+float compute_mesh_radius(const mesh *m);
 
 // ensures triangle winding is outward after centring
 void orient_triangles_outward(const point *points, triangle *triangles, int triangle_count) {
@@ -430,6 +431,22 @@ point midpoint(point a, point b) {
     };
 }
 
+// returns the maximum distance from origin to any mesh point
+float compute_mesh_radius(const mesh *m) {
+    if (!m || !m->points || m->point_count <= 0) return 0.0f;
+
+    float max_radius_squared = 0.0f;
+    for (int i = 0; i < m->point_count; i++) {
+        point p = m->points[i];
+        float radius_squared = p.x * p.x + p.y * p.y + p.z * p.z;
+        if (radius_squared > max_radius_squared) {
+            max_radius_squared = radius_squared;
+        }
+    }
+
+    return sqrtf(max_radius_squared);
+}
+
 // prints lod mesh counts for quick inspection
 void print_lod_mesh_stats(int level, const lod_mesh *lod) {
     printf(
@@ -456,8 +473,12 @@ int main(int argc, char *argv[]) {
     // standardise position
     centre(&m);
 
+    // keep camera outside the model bounds to avoid near-plane warping artifacts
+    float model_radius = compute_mesh_radius(&m);
+    float minimum_camera_z = model_radius + 0.1f;
+
     // initialise rotation angles
-    float delta = 8.0f;
+    float delta = fmaxf(8.0f, minimum_camera_z + 0.5f);
     float angle_x = 0.5f; // pitch
     float angle_y = 0.5f; // yaw
     float angle_z = 0;    // roll
@@ -494,11 +515,12 @@ int main(int argc, char *argv[]) {
     int was_plus_down = 0;
     int was_minus_down = 0;
 
-    // camera position (screen space offsets and zoom)
+    // camera controls in game space
     float camera_x = 0.0f;
     float camera_y = 0.0f;
-    float camera_distance = delta;
-    float mouse_pan_sensitivity = -1.0f;
+    float camera_z = delta;
+    float mouse_drag_move_sensitivity = -0.02f;
+    float camera_move_speed = 6.0f;
     int was_r_down = 0;
 
     // primary game loop
@@ -558,26 +580,34 @@ int main(int argc, char *argv[]) {
         was_plus_down = is_plus_down;
         was_minus_down = is_minus_down;
 
-        // pan camera by dragging while left mouse button is held
+        // move camera in space with wasdqe
+        if (key_down(GLFW_KEY_W)) camera_z -= camera_move_speed * dt;
+        if (key_down(GLFW_KEY_S)) camera_z += camera_move_speed * dt;
+        if (key_down(GLFW_KEY_A)) camera_x += camera_move_speed * dt;
+        if (key_down(GLFW_KEY_D)) camera_x -= camera_move_speed * dt;
+        if (key_down(GLFW_KEY_Q)) camera_y += camera_move_speed * dt;
+        if (key_down(GLFW_KEY_E)) camera_y -= camera_move_speed * dt;
+
+        // move camera on the x/y plane by dragging while left mouse button is held
         float drag_delta_x = 0.0f;
         float drag_delta_y = 0.0f;
         get_left_mouse_drag_delta(&drag_delta_x, &drag_delta_y);
-        camera_x += drag_delta_x * mouse_pan_sensitivity;
-        camera_y -= drag_delta_y * mouse_pan_sensitivity;
+        camera_x += drag_delta_x * mouse_drag_move_sensitivity;
+        camera_y -= drag_delta_y * mouse_drag_move_sensitivity;
 
         // reset camera on R key press edge
         int is_r_down = key_down(GLFW_KEY_R);
         if (is_r_down && !was_r_down) {
             camera_x = 0.0f;
             camera_y = 0.0f;
-            camera_distance = delta;
+            camera_z = delta;
         }
         was_r_down = is_r_down;
 
         // handle camera zoom (scroll wheel)
         float scroll = get_scroll_offset();
-        camera_distance -= scroll * 0.5f;
-        if (camera_distance < 0.0f) camera_distance = 0.0f; // clamp at z = 0
+        camera_z -= scroll * 0.5f;
+        if (camera_z < minimum_camera_z) camera_z = minimum_camera_z;
 
         // wipe previous frame with solid colour
         fill_background(background[0], background[1], background[2]);
@@ -587,7 +617,7 @@ int main(int argc, char *argv[]) {
             angle_x,
             angle_y,
             angle_z,
-            (point){0.0f, 0.0f, camera_distance, 1.0f}
+            (point){camera_x, camera_y, camera_z, 1.0f}
         );
 
         int active_level = subdivision_level;
@@ -599,8 +629,8 @@ int main(int argc, char *argv[]) {
         renderer_draw_mesh(
             lods[active_level].gpu_mesh_id,
             model_to_camera_array,
-            camera_x,
-            camera_y,
+            0.0f,
+            0.0f,
             wireframe_view,
             face_base_colour[0],
             face_base_colour[1],
