@@ -36,6 +36,10 @@ point subtract(point a, point b);
 point cross(point a, point b);
 float dot(point a, point b);
 point midpoint(point a, point b);
+float vector_length(point v);
+point normalise_vector(point v, point fallback);
+mat4 mat4_multiply(const mat4 *a, const mat4 *b);
+mat4 build_look_at_matrix(point camera_position, point target);
 float compute_mesh_radius(const mesh *m);
 
 // ensures triangle winding is outward after centring
@@ -111,6 +115,76 @@ void mat4_to_array(const mat4 *m, float out[16]) {
             out[row * 4 + col] = m->m[row][col];
         }
     }
+}
+
+// returns the euclidean length of a 3D vector
+float vector_length(point v) {
+    return sqrtf(v.x * v.x + v.y * v.y + v.z * v.z);
+}
+
+// normalises a vector and falls back if length is near zero
+point normalise_vector(point v, point fallback) {
+    float length = vector_length(v);
+    if (length <= 0.000001f) {
+        return fallback;
+    }
+
+    return (point){
+        v.x / length,
+        v.y / length,
+        v.z / length,
+        0.0f
+    };
+}
+
+// multiplies two 4x4 matrices (a * b)
+mat4 mat4_multiply(const mat4 *a, const mat4 *b) {
+    mat4 out = {{{0}}};
+    for (int row = 0; row < 4; row++) {
+        for (int col = 0; col < 4; col++) {
+            float sum = 0.0f;
+            for (int i = 0; i < 4; i++) {
+                sum += a->m[row][i] * b->m[i][col];
+            }
+            out.m[row][col] = sum;
+        }
+    }
+    return out;
+}
+
+// builds a camera matrix that always looks at the target point
+mat4 build_look_at_matrix(point camera_position, point target) {
+    point world_up = (point){0.0f, 1.0f, 0.0f, 0.0f};
+
+    point forward = normalise_vector(
+        subtract(target, camera_position),
+        (point){0.0f, 0.0f, 1.0f, 0.0f}
+    );
+
+    point right = cross(world_up, forward);
+    right = normalise_vector(right, (point){1.0f, 0.0f, 0.0f, 0.0f});
+
+    point up = cross(forward, right);
+    up = normalise_vector(up, (point){0.0f, 1.0f, 0.0f, 0.0f});
+
+    mat4 out = mat4_identity();
+
+    out.m[0][0] = right.x;
+    out.m[0][1] = right.y;
+    out.m[0][2] = right.z;
+    out.m[0][3] = -dot(right, camera_position);
+
+    out.m[1][0] = up.x;
+    out.m[1][1] = up.y;
+    out.m[1][2] = up.z;
+    out.m[1][3] = -dot(up, camera_position);
+
+    out.m[2][0] = forward.x;
+    out.m[2][1] = forward.y;
+    out.m[2][2] = forward.z;
+    out.m[2][3] = -dot(forward, camera_position);
+
+    return out;
 }
 
 // hashes a canonical edge pair for bucket lookup
@@ -473,15 +547,17 @@ int main(int argc, char *argv[]) {
     // standardise position
     centre(&m);
 
-    // keep camera outside the model bounds to avoid near-plane warping artifacts
+    // keep the camera outside the model bounds to avoid near-plane warping artifacts
     float model_radius = compute_mesh_radius(&m);
-    float minimum_camera_z = model_radius + 0.1f;
+    float minimum_camera_distance = model_radius + 0.1f;
 
-    // initialise rotation angles
-    float delta = fmaxf(8.0f, minimum_camera_z + 0.5f);
-    float angle_x = 0.5f; // pitch
-    float angle_y = 0.5f; // yaw
-    float angle_z = 0;    // roll
+    // set default camera and light distance from the model centre
+    float delta = fmaxf(8.0f, minimum_camera_distance + 0.5f);
+    point default_camera_position = (point){0.0f, 0.0f, -delta, 1.0f};
+    point fixed_world_light_position = (point){0.0f, 0.0f, -delta, 1.0f};
+    float model_angle_x = 0.5f;
+    float model_angle_y = 0.5f;
+    float model_angle_z = 0.0f;
 
     // set up the display window
     if (!init_renderer(WIDTH, HEIGHT, "Graphix")) return 1;
@@ -502,7 +578,7 @@ int main(int argc, char *argv[]) {
     int max_built_lod = 0;
     print_lod_mesh_stats(0, &lods[0]);
 
-    // track frame time for frame-rate independent rotation
+    // track frame time for frame-rate independent camera movement
     double last_time = glfwGetTime();
 
     const char *autoshot_ppm_path = getenv("GRAPHIX_AUTOSHOT_PPM");
@@ -515,12 +591,14 @@ int main(int argc, char *argv[]) {
     int was_plus_down = 0;
     int was_minus_down = 0;
 
-    // camera controls in game space
-    float camera_x = 0.0f;
-    float camera_y = 0.0f;
-    float camera_z = delta;
-    float mouse_drag_move_sensitivity = -0.02f;
+    // camera controls in first-person style
+    point camera_position = default_camera_position;
+    float camera_yaw = 0.0f;
+    float camera_pitch = 0.0f;
     float camera_move_speed = 6.0f;
+    float camera_zoom_speed = 0.5f;
+    float mouse_look_sensitivity = 0.0025f;
+    float max_camera_pitch = PI * 0.49f;
     int was_r_down = 0;
 
     // primary game loop
@@ -580,45 +658,112 @@ int main(int argc, char *argv[]) {
         was_plus_down = is_plus_down;
         was_minus_down = is_minus_down;
 
-        // move camera in space with wasdqe
-        if (key_down(GLFW_KEY_W)) camera_z -= camera_move_speed * dt;
-        if (key_down(GLFW_KEY_S)) camera_z += camera_move_speed * dt;
-        if (key_down(GLFW_KEY_A)) camera_x += camera_move_speed * dt;
-        if (key_down(GLFW_KEY_D)) camera_x -= camera_move_speed * dt;
-        if (key_down(GLFW_KEY_Q)) camera_y += camera_move_speed * dt;
-        if (key_down(GLFW_KEY_E)) camera_y -= camera_move_speed * dt;
-
-        // move camera on the x/y plane by dragging while left mouse button is held
-        float drag_delta_x = 0.0f;
-        float drag_delta_y = 0.0f;
-        get_left_mouse_drag_delta(&drag_delta_x, &drag_delta_y);
-        camera_x += drag_delta_x * mouse_drag_move_sensitivity;
-        camera_y -= drag_delta_y * mouse_drag_move_sensitivity;
-
         // reset camera on R key press edge
         int is_r_down = key_down(GLFW_KEY_R);
         if (is_r_down && !was_r_down) {
-            camera_x = 0.0f;
-            camera_y = 0.0f;
-            camera_z = delta;
+            camera_position = default_camera_position;
+            camera_yaw = 0.0f;
+            camera_pitch = 0.0f;
         }
         was_r_down = is_r_down;
 
+        // rotate camera while left mouse button is held and dragged
+        float drag_delta_x = 0.0f;
+        float drag_delta_y = 0.0f;
+        get_left_mouse_drag_delta(&drag_delta_x, &drag_delta_y);
+        camera_yaw += drag_delta_x * mouse_look_sensitivity;
+        camera_pitch -= drag_delta_y * mouse_look_sensitivity;
+
+        if (camera_pitch > max_camera_pitch) camera_pitch = max_camera_pitch;
+        if (camera_pitch < -max_camera_pitch) camera_pitch = -max_camera_pitch;
+        camera_yaw = fmodf(camera_yaw, TAU);
+
+        point world_up = (point){0.0f, 1.0f, 0.0f, 0.0f};
+        point camera_forward = normalise_vector(
+            (point){
+                cosf(camera_pitch) * sinf(camera_yaw),
+                sinf(camera_pitch),
+                cosf(camera_pitch) * cosf(camera_yaw),
+                0.0f
+            },
+            (point){0.0f, 0.0f, 1.0f, 0.0f}
+        );
+        point move_forward = normalise_vector(
+            (point){camera_forward.x, 0.0f, camera_forward.z, 0.0f},
+            (point){0.0f, 0.0f, 1.0f, 0.0f}
+        );
+        point move_right = normalise_vector(
+            cross(world_up, move_forward),
+            (point){1.0f, 0.0f, 0.0f, 0.0f}
+        );
+
+        // move camera in first-person style with wasdqe
+        if (key_down(GLFW_KEY_W)) {
+            camera_position.x += move_forward.x * camera_move_speed * dt;
+            camera_position.z += move_forward.z * camera_move_speed * dt;
+        }
+        if (key_down(GLFW_KEY_S)) {
+            camera_position.x -= move_forward.x * camera_move_speed * dt;
+            camera_position.z -= move_forward.z * camera_move_speed * dt;
+        }
+        if (key_down(GLFW_KEY_A)) {
+            camera_position.x -= move_right.x * camera_move_speed * dt;
+            camera_position.z -= move_right.z * camera_move_speed * dt;
+        }
+        if (key_down(GLFW_KEY_D)) {
+            camera_position.x += move_right.x * camera_move_speed * dt;
+            camera_position.z += move_right.z * camera_move_speed * dt;
+        }
+        if (key_down(GLFW_KEY_Q)) camera_position.y += camera_move_speed * dt;
+        if (key_down(GLFW_KEY_E)) camera_position.y -= camera_move_speed * dt;
+
         // handle camera zoom (scroll wheel)
         float scroll = get_scroll_offset();
-        camera_z -= scroll * 0.5f;
-        if (camera_z < minimum_camera_z) camera_z = minimum_camera_z;
+        if (scroll != 0.0f) {
+            camera_position.x += camera_forward.x * scroll * camera_zoom_speed;
+            camera_position.y += camera_forward.y * scroll * camera_zoom_speed;
+            camera_position.z += camera_forward.z * scroll * camera_zoom_speed;
+        }
+
+        // keep the camera outside the model volume
+        float camera_distance = vector_length(camera_position);
+        if (camera_distance < minimum_camera_distance) {
+            point from_origin = normalise_vector(
+                camera_position,
+                (point){0.0f, 0.0f, -1.0f, 0.0f}
+            );
+            camera_position.x = from_origin.x * minimum_camera_distance;
+            camera_position.y = from_origin.y * minimum_camera_distance;
+            camera_position.z = from_origin.z * minimum_camera_distance;
+        }
+        camera_position.w = 1.0f;
 
         // wipe previous frame with solid colour
         fill_background(background[0], background[1], background[2]);
 
-        // build one matrix from pitch/yaw/roll and translation, then apply in one step
-        mat4 model_to_camera = build_transform_matrix(
-            angle_x,
-            angle_y,
-            angle_z,
-            (point){camera_x, camera_y, camera_z, 1.0f}
+        // build model and camera matrices, then combine to model-to-camera
+        mat4 model_matrix = build_transform_matrix(
+            model_angle_x,
+            model_angle_y,
+            model_angle_z,
+            (point){0.0f, 0.0f, 0.0f, 1.0f}
         );
+        mat4 view_matrix = build_look_at_matrix(
+            camera_position,
+            (point){
+                camera_position.x + camera_forward.x,
+                camera_position.y + camera_forward.y,
+                camera_position.z + camera_forward.z,
+                1.0f
+            }
+        );
+        mat4 model_to_camera = mat4_multiply(&view_matrix, &model_matrix);
+        point light_camera_position = (point){
+            view_matrix.m[0][0] * fixed_world_light_position.x + view_matrix.m[0][1] * fixed_world_light_position.y + view_matrix.m[0][2] * fixed_world_light_position.z + view_matrix.m[0][3] * fixed_world_light_position.w,
+            view_matrix.m[1][0] * fixed_world_light_position.x + view_matrix.m[1][1] * fixed_world_light_position.y + view_matrix.m[1][2] * fixed_world_light_position.z + view_matrix.m[1][3] * fixed_world_light_position.w,
+            view_matrix.m[2][0] * fixed_world_light_position.x + view_matrix.m[2][1] * fixed_world_light_position.y + view_matrix.m[2][2] * fixed_world_light_position.z + view_matrix.m[2][3] * fixed_world_light_position.w,
+            view_matrix.m[3][0] * fixed_world_light_position.x + view_matrix.m[3][1] * fixed_world_light_position.y + view_matrix.m[3][2] * fixed_world_light_position.z + view_matrix.m[3][3] * fixed_world_light_position.w
+        };
 
         int active_level = subdivision_level;
         if (active_level > max_built_lod) active_level = max_built_lod;
@@ -631,6 +776,9 @@ int main(int argc, char *argv[]) {
             model_to_camera_array,
             0.0f,
             0.0f,
+            light_camera_position.x,
+            light_camera_position.y,
+            light_camera_position.z,
             wireframe_view,
             face_base_colour[0],
             face_base_colour[1],
@@ -656,15 +804,14 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-        // rotate for next frame (scaled by delta time for frame-rate independence)
-        angle_x += 0.5f * dt;
-        angle_y += 1.0f * dt;
-        angle_z += 0.5f * dt;
-        
-        // wrap angles back to 0-2 PI range
-        angle_x = fmod(angle_x, TAU);
-        angle_y = fmod(angle_y, TAU);
-        angle_z = fmod(angle_z, TAU);
+        // rotate the model so the form stays readable as 3D
+        model_angle_x += 0.5f * dt;
+        model_angle_y += 1.0f * dt;
+        model_angle_z += 0.5f * dt;
+
+        model_angle_x = fmodf(model_angle_x, TAU);
+        model_angle_y = fmodf(model_angle_y, TAU);
+        model_angle_z = fmodf(model_angle_z, TAU);
     }
 
     // prevent memory leaks

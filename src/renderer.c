@@ -37,6 +37,7 @@ static GLint base_colour_uniform = -1;
 static GLint wire_colour_uniform = -1;
 static GLint projection_scale_uniform = -1;
 static GLint lighting_mix_uniform = -1;
+static GLint light_camera_uniform = -1;
 
 static const float RENDER_NEAR_DEPTH = 0.05f;
 static const float RENDER_FAR_DEPTH = 200.0f;
@@ -57,6 +58,7 @@ static const char *vertex_shader_source =
     "uniform vec2 u_depth_range;\n"
     "uniform float u_projection_scale;\n"
     "uniform vec2 u_lighting_mix;\n"
+    "uniform vec3 u_light_camera;\n"
     "uniform vec2 u_pan;\n"
     "uniform int u_use_lighting;\n"
     "uniform vec3 u_base_colour;\n"
@@ -79,8 +81,8 @@ static const char *vertex_shader_source =
     "  gl_Position = vec4(clip_x, clip_y, clip_z, clip_w);\n"
     "  if (u_use_lighting == 1) {\n"
     "    vec3 normal_camera = normalize(mat3(u_model_to_camera) * a_normal);\n"
-    "    vec3 to_light = normalize(-camera_pos.xyz);\n"
-    "    float diffuse = max(dot(normal_camera, to_light), 0.0);\n"
+    "    vec3 to_light_camera = normalize(u_light_camera - camera_pos.xyz);\n"
+    "    float diffuse = max(dot(normal_camera, to_light_camera), 0.0);\n"
     "    float intensity = min(1.0, u_lighting_mix.x + u_lighting_mix.y * diffuse);\n"
     "    v_colour = u_base_colour * intensity;\n"
     "  } else {\n"
@@ -277,6 +279,7 @@ int init_renderer(int width, int height, const char *title) {
     wire_colour_uniform = glGetUniformLocation(shader_program, "u_wire_colour");
     projection_scale_uniform = glGetUniformLocation(shader_program, "u_projection_scale");
     lighting_mix_uniform = glGetUniformLocation(shader_program, "u_lighting_mix");
+    light_camera_uniform = glGetUniformLocation(shader_program, "u_light_camera");
     
     // set scroll callback for camera zoom
     glfwSetScrollCallback(screen, scroll_callback);
@@ -500,6 +503,9 @@ void renderer_draw_mesh(
     const float *model_to_camera,
     float pan_x,
     float pan_y,
+    float light_camera_x,
+    float light_camera_y,
+    float light_camera_z,
     int wireframe,
     int base_r,
     int base_g,
@@ -520,6 +526,7 @@ void renderer_draw_mesh(
     glUniform1f(projection_scale_uniform, RENDER_PROJECTION_SCALE);
     glUniform2f(lighting_mix_uniform, RENDER_AMBIENT_LIGHT, RENDER_DIFFUSE_LIGHT_SCALE);
     glUniform2f(pan_uniform, pan_x, pan_y);
+    glUniform3f(light_camera_uniform, light_camera_x, light_camera_y, light_camera_z);
     glUniform3f(base_colour_uniform, base_r / 255.0f, base_g / 255.0f, base_b / 255.0f);
     glUniform3f(wire_colour_uniform, wire_r / 255.0f, wire_g / 255.0f, wire_b / 255.0f);
 
