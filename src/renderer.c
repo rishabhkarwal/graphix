@@ -4,6 +4,21 @@
 #include <stdlib.h>
 #include <math.h>
 
+#define SHADER_LOG_BUFFER_SIZE 1024
+#define DEFAULT_FPS_VALUE 60.0
+#define MESH_INITIAL_CAPACITY 8
+#define MESH_CAPACITY_GROWTH_FACTOR 2
+#define NORMAL_EPSILON 0.000001f
+#define NORMAL_FALLBACK_Z 1.0f
+#define RGB_COMPONENT_COUNT 3
+#define TRIANGLE_VERTEX_COUNT 3
+#define TRIANGLE_FLOAT_COMPONENT_COUNT 9
+#define EDGE_VERTEX_COUNT 2
+#define COLOUR_MAX_COMPONENT 255.0f
+#define VIEWPORT_HALF_SCALE 0.5f
+#define FPS_UPDATE_INTERVAL_SECONDS 1.0
+#define WINDOW_TITLE_BUFFER_SIZE 64
+
 typedef struct {
     GLuint vbo_positions;
     GLuint vbo_shaded_positions;
@@ -19,7 +34,7 @@ static int screen_width = 0;
 static int screen_height = 0;
 static double last_time = 0;
 static int frames = 0;
-static double current_fps = 60.0;
+static double current_fps = DEFAULT_FPS_VALUE;
 static float scroll_offset = 0.0f;
 static double last_cursor_x = 0.0;
 static double last_cursor_y = 0.0;
@@ -108,7 +123,7 @@ static GLuint compile_shader(GLenum type, const char *source) {
     GLint compiled = 0;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
     if (!compiled) {
-        char log[1024];
+        char log[SHADER_LOG_BUFFER_SIZE];
         GLsizei log_length = 0;
         glGetShaderInfoLog(shader, sizeof(log), &log_length, log);
         fprintf(stderr, "Shader compile error: %.*s\n", (int)log_length, log);
@@ -146,7 +161,7 @@ static GLuint create_shader_program(void) {
     GLint linked = 0;
     glGetProgramiv(program, GL_LINK_STATUS, &linked);
     if (!linked) {
-        char log[1024];
+        char log[SHADER_LOG_BUFFER_SIZE];
         GLsizei log_length = 0;
         glGetProgramInfoLog(program, sizeof(log), &log_length, log);
         fprintf(stderr, "Program link error: %.*s\n", (int)log_length, log);
@@ -163,9 +178,9 @@ static GLuint create_shader_program(void) {
 static int ensure_mesh_capacity(int required_count) {
     if (required_count <= mesh_capacity) return 1;
 
-    int new_capacity = (mesh_capacity > 0) ? mesh_capacity : 8;
+    int new_capacity = (mesh_capacity > 0) ? mesh_capacity : MESH_INITIAL_CAPACITY;
     while (new_capacity < required_count) {
-        new_capacity *= 2;
+        new_capacity *= MESH_CAPACITY_GROWTH_FACTOR;
     }
 
     gpu_mesh *resized = realloc(meshes, (size_t)new_capacity * sizeof(gpu_mesh));
@@ -201,10 +216,10 @@ static void write_triangle_normal(
     float z = abx * acy - aby * acx;
 
     float length = sqrtf(x * x + y * y + z * z);
-    if (length <= 0.000001f) {
+    if (length <= NORMAL_EPSILON) {
         *nx = 0.0f;
         *ny = 0.0f;
-        *nz = 1.0f;
+        *nz = NORMAL_FALLBACK_Z;
         return;
     }
 
@@ -360,7 +375,7 @@ float get_scroll_offset(void) {
 int renderer_capture_framebuffer_ppm(const char *path) {
     if (!path || !screen) return 0;
 
-    int byte_count = screen_width * screen_height * 3;
+    int byte_count = screen_width * screen_height * RGB_COMPONENT_COUNT;
     if (byte_count <= 0) return 0;
 
     unsigned char *pixels = malloc((size_t)byte_count);
@@ -380,7 +395,12 @@ int renderer_capture_framebuffer_ppm(const char *path) {
 
     // glReadPixels returns bottom-up rows; write top-down for normal image orientation.
     for (int y = screen_height - 1; y >= 0; y--) {
-        fwrite(pixels + (size_t)y * (size_t)screen_width * 3, 1, (size_t)screen_width * 3, out);
+        fwrite(
+            pixels + (size_t)y * (size_t)screen_width * RGB_COMPONENT_COUNT,
+            1,
+            (size_t)screen_width * RGB_COMPONENT_COUNT,
+            out
+        );
     }
 
     fclose(out);
@@ -403,10 +423,10 @@ int renderer_upload_mesh(
     int mesh_id = allocate_mesh_slot();
     if (mesh_id < 0) return -1;
 
-    float *position_data = malloc((size_t)point_count * 3 * sizeof(float));
-    float *shaded_position_data = malloc((size_t)triangle_count * 9 * sizeof(float));
-    float *shaded_normal_data = malloc((size_t)triangle_count * 9 * sizeof(float));
-    unsigned int *line_indices = malloc((size_t)edge_count * 2 * sizeof(unsigned int));
+    float *position_data = malloc((size_t)point_count * RGB_COMPONENT_COUNT * sizeof(float));
+    float *shaded_position_data = malloc((size_t)triangle_count * TRIANGLE_FLOAT_COMPONENT_COUNT * sizeof(float));
+    float *shaded_normal_data = malloc((size_t)triangle_count * TRIANGLE_FLOAT_COMPONENT_COUNT * sizeof(float));
+    unsigned int *line_indices = malloc((size_t)edge_count * EDGE_VERTEX_COUNT * sizeof(unsigned int));
 
     if (!position_data || !shaded_position_data || !shaded_normal_data || (!line_indices && edge_count > 0)) {
         if (position_data) free(position_data);
@@ -417,9 +437,9 @@ int renderer_upload_mesh(
     }
 
     for (int i = 0; i < point_count; i++) {
-        position_data[i * 3 + 0] = positions[i].x;
-        position_data[i * 3 + 1] = positions[i].y;
-        position_data[i * 3 + 2] = positions[i].z;
+        position_data[i * RGB_COMPONENT_COUNT + 0] = positions[i].x;
+        position_data[i * RGB_COMPONENT_COUNT + 1] = positions[i].y;
+        position_data[i * RGB_COMPONENT_COUNT + 2] = positions[i].z;
     }
 
     for (int i = 0; i < triangle_count; i++) {
@@ -430,7 +450,7 @@ int renderer_upload_mesh(
         float nx = 0.0f, ny = 0.0f, nz = 1.0f;
         write_triangle_normal(pa.x, pa.y, pa.z, pb.x, pb.y, pb.z, pc.x, pc.y, pc.z, &nx, &ny, &nz);
 
-        int base = i * 9;
+        int base = i * TRIANGLE_FLOAT_COMPONENT_COUNT;
         shaded_position_data[base + 0] = pa.x;
         shaded_position_data[base + 1] = pa.y;
         shaded_position_data[base + 2] = pa.z;
@@ -453,8 +473,8 @@ int renderer_upload_mesh(
     }
 
     for (int i = 0; i < edge_count; i++) {
-        line_indices[i * 2 + 0] = (unsigned int)edges[i].start;
-        line_indices[i * 2 + 1] = (unsigned int)edges[i].end;
+        line_indices[i * EDGE_VERTEX_COUNT + 0] = (unsigned int)edges[i].start;
+        line_indices[i * EDGE_VERTEX_COUNT + 1] = (unsigned int)edges[i].end;
     }
 
     gpu_mesh mesh = {0};
@@ -464,16 +484,26 @@ int renderer_upload_mesh(
     glGenBuffers(1, &mesh.ibo_lines);
 
     glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo_positions);
-    glBufferData(GL_ARRAY_BUFFER, (size_t)point_count * 3 * sizeof(float), position_data, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, (size_t)point_count * RGB_COMPONENT_COUNT * sizeof(float), position_data, GL_STATIC_DRAW);
 
     glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo_shaded_positions);
-    glBufferData(GL_ARRAY_BUFFER, (size_t)triangle_count * 9 * sizeof(float), shaded_position_data, GL_STATIC_DRAW);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        (size_t)triangle_count * TRIANGLE_FLOAT_COMPONENT_COUNT * sizeof(float),
+        shaded_position_data,
+        GL_STATIC_DRAW
+    );
 
     glBindBuffer(GL_ARRAY_BUFFER, mesh.vbo_shaded_normals);
-    glBufferData(GL_ARRAY_BUFFER, (size_t)triangle_count * 9 * sizeof(float), shaded_normal_data, GL_STATIC_DRAW);
+    glBufferData(
+        GL_ARRAY_BUFFER,
+        (size_t)triangle_count * TRIANGLE_FLOAT_COMPONENT_COUNT * sizeof(float),
+        shaded_normal_data,
+        GL_STATIC_DRAW
+    );
 
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh.ibo_lines);
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (size_t)edge_count * 2 * sizeof(unsigned int), line_indices, GL_STATIC_DRAW);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, (size_t)edge_count * EDGE_VERTEX_COUNT * sizeof(unsigned int), line_indices, GL_STATIC_DRAW);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
@@ -483,8 +513,8 @@ int renderer_upload_mesh(
     free(shaded_normal_data);
     free(line_indices);
 
-    mesh.shaded_vertex_count = (GLsizei)(triangle_count * 3);
-    mesh.line_index_count = (GLsizei)(edge_count * 2);
+    mesh.shaded_vertex_count = (GLsizei)(triangle_count * TRIANGLE_VERTEX_COUNT);
+    mesh.line_index_count = (GLsizei)(edge_count * EDGE_VERTEX_COUNT);
     mesh.in_use = 1;
     meshes[mesh_id] = mesh;
 
@@ -521,14 +551,14 @@ void renderer_draw_mesh(
 
     glUseProgram(shader_program);
     glUniformMatrix4fv(model_to_camera_uniform, 1, GL_TRUE, model_to_camera);
-    glUniform2f(viewport_half_uniform, screen_width * 0.5f, screen_height * 0.5f);
+    glUniform2f(viewport_half_uniform, screen_width * VIEWPORT_HALF_SCALE, screen_height * VIEWPORT_HALF_SCALE);
     glUniform2f(depth_range_uniform, RENDER_NEAR_DEPTH, RENDER_FAR_DEPTH);
     glUniform1f(projection_scale_uniform, RENDER_PROJECTION_SCALE);
     glUniform2f(lighting_mix_uniform, RENDER_AMBIENT_LIGHT, RENDER_DIFFUSE_LIGHT_SCALE);
     glUniform2f(pan_uniform, pan_x, pan_y);
     glUniform3f(light_camera_uniform, light_camera_x, light_camera_y, light_camera_z);
-    glUniform3f(base_colour_uniform, base_r / 255.0f, base_g / 255.0f, base_b / 255.0f);
-    glUniform3f(wire_colour_uniform, wire_r / 255.0f, wire_g / 255.0f, wire_b / 255.0f);
+    glUniform3f(base_colour_uniform, base_r / COLOUR_MAX_COMPONENT, base_g / COLOUR_MAX_COMPONENT, base_b / COLOUR_MAX_COMPONENT);
+    glUniform3f(wire_colour_uniform, wire_r / COLOUR_MAX_COMPONENT, wire_g / COLOUR_MAX_COMPONENT, wire_b / COLOUR_MAX_COMPONENT);
 
     glEnableVertexAttribArray((GLuint)position_attr);
     glEnableVertexAttribArray((GLuint)normal_attr);
@@ -538,8 +568,8 @@ void renderer_draw_mesh(
         glDisable(GL_CULL_FACE);
 
         glBindBuffer(GL_ARRAY_BUFFER, mesh->vbo_positions);
-        glVertexAttribPointer((GLuint)position_attr, 3, GL_FLOAT, GL_FALSE, 0, (const void *)0);
-        glVertexAttrib3f((GLuint)normal_attr, 0.0f, 0.0f, 1.0f);
+        glVertexAttribPointer((GLuint)position_attr, RGB_COMPONENT_COUNT, GL_FLOAT, GL_FALSE, 0, (const void *)0);
+        glVertexAttrib3f((GLuint)normal_attr, 0.0f, 0.0f, NORMAL_FALLBACK_Z);
 
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ibo_lines);
         glDrawElements(GL_LINES, mesh->line_index_count, GL_UNSIGNED_INT, (const void *)0);
@@ -550,10 +580,10 @@ void renderer_draw_mesh(
         glFrontFace(GL_CW);
 
         glBindBuffer(GL_ARRAY_BUFFER, mesh->vbo_shaded_positions);
-        glVertexAttribPointer((GLuint)position_attr, 3, GL_FLOAT, GL_FALSE, 0, (const void *)0);
+        glVertexAttribPointer((GLuint)position_attr, RGB_COMPONENT_COUNT, GL_FLOAT, GL_FALSE, 0, (const void *)0);
 
         glBindBuffer(GL_ARRAY_BUFFER, mesh->vbo_shaded_normals);
-        glVertexAttribPointer((GLuint)normal_attr, 3, GL_FLOAT, GL_FALSE, 0, (const void *)0);
+        glVertexAttribPointer((GLuint)normal_attr, RGB_COMPONENT_COUNT, GL_FLOAT, GL_FALSE, 0, (const void *)0);
 
         glDrawArrays(GL_TRIANGLES, 0, mesh->shaded_vertex_count);
     }
@@ -568,7 +598,7 @@ void renderer_draw_mesh(
 // clears colour and depth buffers for a new frame
 void fill_background(int r, int g, int b) {
     // clears screen using the given RGB colour
-    glClearColor(r / 255.0f, g / 255.0f, b / 255.0f, 1.0f);
+    glClearColor(r / COLOUR_MAX_COMPONENT, g / COLOUR_MAX_COMPONENT, b / COLOUR_MAX_COMPONENT, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
@@ -577,12 +607,12 @@ void update_display(void) {
     // updates fps in the window title
     double now = glfwGetTime();
     frames++;
-    if (now - last_time >= 1.0) {
+    if (now - last_time >= FPS_UPDATE_INTERVAL_SECONDS) {
         current_fps = frames / (now - last_time);
         frames = 0;
         last_time = now;
         
-        char title[64];
+        char title[WINDOW_TITLE_BUFFER_SIZE];
         snprintf(title, sizeof(title), "FPS: %.0f", current_fps);
         glfwSetWindowTitle(screen, title); // write fps to title bar
     }

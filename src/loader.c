@@ -2,6 +2,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#define INITIAL_MESH_CAPACITY 1024
+#define OBJ_LINE_BUFFER_SIZE 256
+#define MAX_FACE_VERTEX_COUNT 64
+#define DYNAMIC_ARRAY_GROWTH_FACTOR 2
+#define OBJ_PREFIX_OFFSET 2
+#define CENTRE_DIVISOR 2.0f
+
 // loads an obj mesh and builds adjacency data for fast lookups
 mesh load_obj(const char *filename) {
     mesh m = {0};
@@ -13,16 +20,16 @@ mesh load_obj(const char *filename) {
     }
     
     // start with a small allocation pool
-    int point_cap = 1024;
-    int edge_cap = 1024;
-    int triangle_cap = 1024;
+    int point_cap = INITIAL_MESH_CAPACITY;
+    int edge_cap = INITIAL_MESH_CAPACITY;
+    int triangle_cap = INITIAL_MESH_CAPACITY;
     point *points = malloc(point_cap * sizeof(point));
     edge *edges = malloc(edge_cap * sizeof(edge));
     triangle *triangles = malloc(triangle_cap * sizeof(triangle));
     
     int point_count = 0, edge_count = 0, triangle_count = 0, face_count = 0;
     
-    char line[256];
+    char line[OBJ_LINE_BUFFER_SIZE];
     while (fgets(line, sizeof(line), f)) {
         if (line[0] == 'v' && line[1] == ' ') {
             // parse vertex: v ...
@@ -30,7 +37,7 @@ mesh load_obj(const char *filename) {
             if (sscanf(line, "v %f %f %f", &x, &y, &z) == 3) {
                 // dynamically resize points array if full
                 if (point_count >= point_cap) {
-                    point_cap *= 2;
+                    point_cap *= DYNAMIC_ARRAY_GROWTH_FACTOR;
                     points = realloc(points, point_cap * sizeof(point));
                 }
                 points[point_count++] = (point){x, y, z, 1.0f};
@@ -39,8 +46,8 @@ mesh load_obj(const char *filename) {
             face_count++;
             
             // parse face: f ...
-            int v[64], count = 0; // 64 is safe enough for complex polygons
-            char *token = line + 2;
+            int v[MAX_FACE_VERTEX_COUNT], count = 0; // max polygon fan size accepted by this parser
+            char *token = line + OBJ_PREFIX_OFFSET;
             
             while (*token != '\0') {
                 while (*token == ' ') token++;
@@ -64,7 +71,7 @@ mesh load_obj(const char *filename) {
                         index = point_count + raw_index;
                     }
 
-                    if (index >= 0 && index < point_count && count < 64) {
+                    if (index >= 0 && index < point_count && count < MAX_FACE_VERTEX_COUNT) {
                         v[count++] = index;
                     }
                 }
@@ -77,7 +84,7 @@ mesh load_obj(const char *filename) {
             for (int i = 0; i < count; i++) {
                 // dynamically resize edges array
                 if (edge_count >= edge_cap) {
-                    edge_cap *= 2;
+                    edge_cap *= DYNAMIC_ARRAY_GROWTH_FACTOR;
                     edges = realloc(edges, edge_cap * sizeof(edge));
                 }
                 int start = v[i];
@@ -88,7 +95,7 @@ mesh load_obj(const char *filename) {
             // triangulate each polygon face using fan triangulation
             for (int i = 1; i + 1 < count; i++) {
                 if (triangle_count >= triangle_cap) {
-                    triangle_cap *= 2;
+                    triangle_cap *= DYNAMIC_ARRAY_GROWTH_FACTOR;
                     triangles = realloc(triangles, triangle_cap * sizeof(triangle));
                 }
 
@@ -169,9 +176,9 @@ void centre(mesh *m) {
     }
     
     // calculate the centre co-ordinate
-    float centre_x = (min_x + max_x) / 2.0f;
-    float centre_y = (min_y + max_y) / 2.0f;
-    float centre_z = (min_z + max_z) / 2.0f;
+    float centre_x = (min_x + max_x) / CENTRE_DIVISOR;
+    float centre_y = (min_y + max_y) / CENTRE_DIVISOR;
+    float centre_z = (min_z + max_z) / CENTRE_DIVISOR;
     
     // shift all points so the centre becomes (0, 0, 0)
     for (int i = 0; i < m->point_count; i++) {

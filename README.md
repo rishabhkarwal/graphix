@@ -30,8 +30,6 @@ make
 | **Left Click + Drag** | Pan camera |
 | **Scroll** | Zoom in/out |
 | **R** | Reset camera to default position |
-| **+** | Increase subdivision level |
-| **-** | Decrease subdivision level |
 
 
 ## Requirements
